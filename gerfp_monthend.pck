@@ -1,27 +1,24 @@
-CREATE OR REPLACE PACKAGE GERFP_MONTHEND
-  IS
---
--- To modify this template, edit file PKGSPEC.TXT in TEMPLATE 
--- directory of SQL Navigator
---
--- Purpose: Briefly explain the functionality of the package
---
--- MODIFICATION HISTORY
--- Person      Date    Comments
--- ---------   ------  ------------------------------------------       
-   -- Enter package declarations as shown below
+CREATE OR REPLACE PACKAGE gerfp_monthend IS
+  --
+  -- To modify this template, edit file PKGSPEC.TXT in TEMPLATE 
+  -- directory of SQL Navigator
+  --
+  -- Purpose: Briefly explain the functionality of the package
+  --
+  -- MODIFICATION HISTORY
+  -- Person      Date    Comments
+  -- ---------   ------  ------------------------------------------       
+  -- Enter package declarations as shown below
+  PROCEDURE launchqueue(errbuff     OUT VARCHAR2,
+                        retcode     OUT VARCHAR2,
+                        p_period    IN VARCHAR2,
+                        p_rate_date IN VARCHAR2);
 
-   PROCEDURE LaunchQueue( errbuff   OUT  VARCHAR2
-                   , retcode   OUT  VARCHAR2
-                   , P_PERIOD IN VARCHAR2
-                   );
-                   
-   PROCEDURE SEND_STATUS_REPORT(
-                p_user_id IN number,
-                P_RECIPIENTS    IN    VARCHAR2, 
-                P_STAT         OUT    VARCHAR2,
-                P_MSG          OUT    VARCHAR2); 
-    
+  PROCEDURE send_status_report(p_user_id    IN NUMBER,
+                               p_recipients IN VARCHAR2,
+                               p_stat       OUT VARCHAR2,
+                               p_msg        OUT VARCHAR2);
+
 /* 
    FUNCTION function_name
      ( param1 IN datatype DEFAULT default_value, 
@@ -30,1065 +27,518 @@ CREATE OR REPLACE PACKAGE GERFP_MONTHEND
 */
 END; -- Package spec
 /
-CREATE OR REPLACE PACKAGE BODY GERFP_MONTHEND
+CREATE OR REPLACE PACKAGE BODY gerfp_monthend
 --GERFP_ME_LAUNCHQUEUE
-IS
---
--- To modify this template, edit file PKGBODY.TXT in TEMPLATE 
--- directory of SQL Navigator
---
--- Purpose: Briefly explain the functionality of the package body
---
--- MODIFICATION HISTORY
--- Person      Date    Comments
--- ---------   ------  ------------------------------------------      
-   -- Enter procedure, function bodies as shown below
+ IS
+  --
+  -- To modify this template, edit file PKGBODY.TXT in TEMPLATE 
+  -- directory of SQL Navigator
+  --
+  -- Purpose: Briefly explain the functionality of the package body
+  --
+  -- MODIFICATION HISTORY
+  -- Person      Date    Comments
+  -- ---------   ------  ------------------------------------------      
+  -- Enter procedure, function bodies as shown below
 
-v_conc_request        NUMBER      :=   FND_GLOBAL.CONC_REQUEST_ID;
+  v_conc_request NUMBER := fnd_global.conc_request_id;
 
-   PROCEDURE LaunchQueue(errbuff   OUT  VARCHAR2
-                   , retcode   OUT  VARCHAR2
-                   , P_PERIOD IN VARCHAR2
-                   )
-    IS
-      -- Enter the procedure variables here. As shown below
-     --variable_name        datatype  NOT NULL DEFAULT default_value;
-      V_User_id                 NUMBER;  
-      V_REQ_ID           	    NUMBER;
-      V_REQUEST_COMPLETE 		BOOLEAN;
-      V_PHASE           	    VARCHAR2(20);
-      V_STATUS           		VARCHAR2(20);
-      V_DEV_PHASE        		VARCHAR2(20);
-      V_DEV_STATUS       		VARCHAR2(20);
-      V_MESSAGE          		VARCHAR2(200);
-    
-      V_Last_Req                NUMBER;              
-      
-      X_STATUS                  VARCHAR2(20);
-      
-      V_US_Year                    VARCHAR2(20);
-      V_US_Date                    VARCHAR2(20);
-      E_Invalid_Period             Exception; 
-      
-      V_STAT                       VARCHAR2(20);
-      V_MSG                        VARCHAR2(20); 
-      
-      cursor C_Queue(p_user_id number,p_req_id number)
-      is
-      --select distinct REQUEST_ID from fnd_concurrent_requests 
-      select REQUEST_ID,USER_CONCURRENT_PROGRAM_NAME, ARGUMENT_TEXT,REQUEST_DATE,REQUESTED_START_DATE,ACTUAL_START_DATE,ACTUAL_COMPLETION_DATE from FND_CONC_REQ_SUMMARY_V
-      where 
-        --nvl(PHASE_CODE,'N')<>'C' and 
-        REQUESTED_BY=p_user_id and REQUEST_ID>p_req_id order by REQUEST_ID;
+  PROCEDURE wait_for_requests(p_req_id IN VARCHAR2) IS
   
-   BEGIN 
-      X_STATUS                  := NULL;
-      
-      FND_GLOBAL.SET_NLS_CONTEXT (P_NLS_LANGUAGE => 'AMERICAN');  
-      APPS.FND_PROFILE.GET('USER_ID', v_user_id);
-      FND_FILE.PUT_LINE(FND_FILE.LOG,'The master request id is ' || v_conc_request);
-
---Validate the input parameter: period      
-      Begin
-          SELECT DISTINCT PERIOD_YEAR,'15-' || PERIOD_NAME INTO V_US_YEAR,V_US_DATE
-          FROM GL_PERIOD_STATUSES WHERE APPLICATION_ID=101 AND CLOSING_STATUS IN ('O') AND PERIOD_TYPE='21' 
-          AND ADJUSTMENT_PERIOD_FLAG<>'Y' AND PERIOD_NAME=upper(P_PERIOD);
-      
-      EXCEPTION
-          WHEN NO_DATA_FOUND THEN 
-            FND_FILE.PUT_LINE( FND_FILE.LOG,'Invalid Period: ' || P_PERIOD);
-            Raise E_Invalid_Period;
-      END;
-       
---P book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'P'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step1:AUTOPOST_P | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        
-        LOOP
-
-            V_Last_Req:=V_REQ_ID;        
-            
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-                    
-            dbms_lock.sleep(60);
-            
-            V_REQ_ID :=null;
-            
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-                LOOP
-                  V_PHASE      				:= NULL;
-                  V_STATUS     				:= NULL;
-                  V_DEV_PHASE  				:= NULL;
-                  V_DEV_STATUS 				:= NULL;
-                  V_MESSAGE    				:= NULL;
-     
-                  
-                  V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
+    v_user_id          NUMBER;
+    v_req_id           NUMBER;
+    v_request_complete BOOLEAN;
+    v_phase            VARCHAR2(20);
+    v_status           VARCHAR2(20);
+    v_dev_phase        VARCHAR2(20);
+    v_dev_status       VARCHAR2(20);
+    v_message          VARCHAR2(200);
+  
+    v_last_req NUMBER;
+  
+    CURSOR c_queue(p_user_id NUMBER,
+                   pc_req_id NUMBER) IS
+    --select distinct REQUEST_ID from fnd_concurrent_requests 
+      SELECT request_id,
+             user_concurrent_program_name,
+             argument_text,
+             request_date,
+             requested_start_date,
+             actual_start_date,
+             actual_completion_date
+        FROM fnd_conc_req_summary_v
+       WHERE
+      --nvl(PHASE_CODE,'N')<>'C' and 
+       requested_by = p_user_id
+       AND request_id > pc_req_id
+       ORDER BY request_id;
+  
+  BEGIN
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------Quene check begins.-----------------------');
+  
+    v_req_id := p_req_id;
+    apps.fnd_profile.get('USER_ID',
+                         v_user_id);
+  
+    LOOP
     
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step1:AUTOPOST_P | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-                        EXIT;
-                    END IF;
-                END LOOP;
-            END LOOP;        
+      v_last_req := v_req_id;
+    
+      IF nvl(v_last_req,
+             0) = 0 THEN
+        EXIT;
+      END IF;
+    
+      dbms_lock.sleep(60);
+    
+      v_req_id := NULL;
+    
+      FOR v_request IN c_queue(v_user_id,
+                               v_last_req)
+      LOOP
+      
+        v_req_id := v_request.request_id;
+        LOOP
+          v_phase      := NULL;
+          v_status     := NULL;
+          v_dev_phase  := NULL;
+          v_dev_status := NULL;
+          v_message    := NULL;
+        
+          v_request_complete := apps.fnd_concurrent.wait_for_request(v_req_id,
+                                                                     10,
+                                                                     9999,
+                                                                     v_phase,
+                                                                     v_status,
+                                                                     v_dev_phase,
+                                                                     v_dev_status,
+                                                                     v_message);
+        
+          IF upper(v_phase) = 'COMPLETED' THEN
+            fnd_file.put_line(fnd_file.log,
+                              'Request:' || v_req_id || '|' ||
+                              v_request.user_concurrent_program_name || '(' ||
+                              v_request.argument_text || ')|' || v_phase || '|' ||
+                              v_status || '|' || v_message || '|' ||
+                              to_char(v_request.request_date,
+                                      'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                              to_char(v_request.requested_start_date,
+                                      'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                              to_char(v_request.actual_start_date,
+                                      'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                              to_char(v_request.actual_completion_date,
+                                      'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                              to_char(SYSDATE,
+                                      'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                              'Elapsed Time:' ||
+                              round((v_request.actual_completion_date -
+                                    v_request.actual_start_date) * 1440 * 60));
+            EXIT;
+          END IF;
         END LOOP;
-        
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Post end.---');
+      END LOOP;
+    END LOOP;
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------Quene check ends.-----------------------');
+  
+  END;
 
---R book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
+  PROCEDURE remeasure(p_period    IN VARCHAR2,
+                      p_rate_date IN VARCHAR2,
+                      p_mrc_type  IN VARCHAR2) IS
+  
+    v_req_id     NUMBER;
+    v_start_time NUMBER;
+  
+  BEGIN
+    --P book Post
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': Remeasurement begin.MRC Type:' || p_mrc_type ||
+                      '-----------------------');
+    v_start_time := dbms_utility.get_time;
+    v_req_id     := fnd_request.submit_request(application => 'XXRFP',
+                                               program     => 'GERFPGRM',
+                                               description => NULL,
+                                               start_time  => SYSDATE,
+                                               sub_request => FALSE,
+                                               argument1   => NULL,
+                                               argument2   => NULL,
+                                               argument3   => NULL,
+                                               argument4   => p_mrc_type,
+                                               argument5   => NULL,
+                                               argument6   => p_period,
+                                               argument7   => p_rate_date);
+    COMMIT;
+  
+    IF v_req_id = 0 THEN
+      fnd_file.put_line(fnd_file.log,
+                        fnd_message.get);
+      RAISE fnd_api.g_exc_error;
     ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step1:AUTOPOST_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        
-        LOOP
-
-            V_Last_Req:=V_REQ_ID;        
-            
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-                    
-            dbms_lock.sleep(60);
-            
-            V_REQ_ID :=null;
-            
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
+      fnd_file.put_line(fnd_file.log,
+                        'Remeasurement Request: ' || v_req_id || '|' ||
+                        to_char(SYSDATE,
+                                'DD-MON-YYYY HH24:MI:SS'));
+      wait_for_requests(v_req_id);
     
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step1:AUTOPOST_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post end.---');
+    END IF;
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': Remeasurement end.MRC Type:' || p_mrc_type ||
+                      '. Elapsed Time:' ||
+                      round((dbms_utility.get_time - v_start_time) / 100) ||
+                      '-----------------------');
+  END;
 
-
---P book Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOREVAL'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'P'
-				   ,ARGUMENT2     => Upper(P_PERIOD)
-				   ,ARGUMENT3     => NULL
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
+  PROCEDURE translate(p_period    IN VARCHAR2,
+                      p_rate_date IN VARCHAR2) IS
+  
+    v_req_id     NUMBER;
+    x_status     VARCHAR2(20);
+    v_start_time NUMBER;
+  BEGIN
+    --P book Post
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': Translation begin.-----------------------');
+    v_start_time := dbms_utility.get_time;
+    v_req_id     := fnd_request.submit_request(application => 'XXRFP',
+                                               program     => 'GERFPGTR',
+                                               description => NULL,
+                                               start_time  => SYSDATE,
+                                               sub_request => FALSE,
+                                               argument1   => NULL,
+                                               argument2   => NULL,
+                                               argument3   => NULL,
+                                               argument4   => NULL,
+                                               argument5   => p_period,
+                                               argument6   => p_rate_date);
+    COMMIT;
+    IF v_req_id = 0 THEN
+      fnd_file.put_line(fnd_file.log,
+                        fnd_message.get);
+      RAISE fnd_api.g_exc_error;
     ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step2:AUTOREVAL_P | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
+      fnd_file.put_line(fnd_file.log,
+                        'Translation Request: ' || v_req_id || '|' ||
+                        to_char(SYSDATE,
+                                'DD-MON-YYYY HH24:MI:SS'));
+      wait_for_requests(v_req_id);
     
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step2:AUTOREVAL_P | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Revaluation end.---');
+    END IF;
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': Translation end. Elapsed Time:' ||
+                      round((dbms_utility.get_time - v_start_time) / 100) ||
+                      '-----------------------');
+  END;
 
---R book Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOREVAL'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => Upper(P_PERIOD)
-				   ,ARGUMENT3     => NULL
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
+  PROCEDURE ustax(p_period    IN VARCHAR2,
+                  p_rate_date IN VARCHAR2,
+                  p_us_year   IN VARCHAR2,
+                  p_us_date   IN VARCHAR2) IS
+  
+    v_req_id     NUMBER;
+    x_status     VARCHAR2(20);
+    v_start_time NUMBER;
+  
+  BEGIN
+    --P book Post
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': USTAX begin.-----------------------');
+  
+    v_start_time := dbms_utility.get_time;
+    v_req_id     := fnd_request.submit_request(application => 'SQLGL',
+                                               program     => 'GERFP_AUTO_RUN_US_TAX',
+                                               description => NULL,
+                                               start_time  => SYSDATE,
+                                               sub_request => FALSE,
+                                               argument1   => p_us_year,
+                                               argument2   => upper(p_period),
+                                               argument3   => p_us_date);
+    COMMIT;
+  
+    IF v_req_id = 0 THEN
+      fnd_file.put_line(fnd_file.log,
+                        fnd_message.get);
+      RAISE fnd_api.g_exc_error;
     ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step2:AUTOREVAL_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
+      fnd_file.put_line(fnd_file.log,
+                        'USTAX Request: ' || v_req_id || '|' ||
+                        to_char(SYSDATE,
+                                'DD-MON-YYYY HH24:MI:SS'));
+      wait_for_requests(v_req_id);
     
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step2:AUTOREVAL_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Revaluation end.---');
+    END IF;
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': USTAX end. Elapsed Time:' ||
+                      round((dbms_utility.get_time - v_start_time) / 100) ||
+                      '-----------------------');
+  END;
 
---P book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'P'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
+  PROCEDURE posting(p_mrc_type IN VARCHAR2) IS
+  
+    v_req_id     NUMBER;
+    v_start_time NUMBER;
+  BEGIN
+    --P book Post
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') || ': ' ||
+                      p_mrc_type ||
+                      ' Book Post begin.-----------------------');
+  
+    v_start_time := dbms_utility.get_time;
+    v_req_id     := fnd_request.submit_request(application => 'SQLGL',
+                                               program     => 'GERFP_GL_AUTOPOSTING',
+                                               description => NULL,
+                                               start_time  => SYSDATE,
+                                               sub_request => FALSE,
+                                               argument1   => p_mrc_type,
+                                               argument2   => NULL);
+    COMMIT;
+  
+    IF v_req_id = 0 THEN
+      fnd_file.put_line(fnd_file.log,
+                        fnd_message.get);
+      RAISE fnd_api.g_exc_error;
     ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step3:AUTOPOST_P | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-                LOOP
-                  V_PHASE      				:= NULL;
-                  V_STATUS     				:= NULL;
-                  V_DEV_PHASE  				:= NULL;
-                  V_DEV_STATUS 				:= NULL;
-                  V_MESSAGE    				:= NULL;
-     
-                  
-                  V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
+      fnd_file.put_line(fnd_file.log,
+                        'AUTOPOST Request: ' || v_req_id || '|' ||
+                        to_char(SYSDATE,
+                                'DD-MON-YYYY HH24:MI:SS'));
+      wait_for_requests(v_req_id);
     
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step3:AUTOPOST_P | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Post end.---');
+    END IF;
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') || ': ' ||
+                      p_mrc_type || ' Book Post end. Elapsed Time:' ||
+                      round((dbms_utility.get_time - v_start_time) / 100) ||
+                      '-----------------------');
+  END;
 
---R book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step3:AUTOPOST_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step3:AUTOPOST_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post end.---');
-
-
---P book Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOREVAL'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'P'
-				   ,ARGUMENT2     => Upper(P_PERIOD)
-				   ,ARGUMENT3     => NULL
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step4:AUTOREVAL_P | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step4:AUTOREVAL_P | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Revaluation end.---');
-
---R book Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOREVAL'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => Upper(P_PERIOD)
-				   ,ARGUMENT3     => NULL
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step4:AUTOREVAL_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step4:AUTOREVAL_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Revaluation end.---');
-
---US tax
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---US tax begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_AUTO_RUN_US_TAX'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => V_US_YEAR
-				   ,ARGUMENT2     => upper(P_PERIOD)
-				   ,ARGUMENT3     => V_US_Date
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step5:US_TAX | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step5:US_TAX | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                                                
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---US tax end.---');
-
---P book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'P'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step6:AUTOPOST_P | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-                LOOP
-                  V_PHASE      				:= NULL;
-                  V_STATUS     				:= NULL;
-                  V_DEV_PHASE  				:= NULL;
-                  V_DEV_STATUS 				:= NULL;
-                  V_MESSAGE    				:= NULL;
-     
-                  
-                  V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step6:AUTOPOST_P | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Post end.---');
-
---R book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step6:AUTOPOST_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step6:AUTOPOST_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post end.---');
-
---P book Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOREVAL'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'P'
-				   ,ARGUMENT2     => upper(P_PERIOD)
-				   ,ARGUMENT3     => NULL
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step7:AUTOREVAL_P | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step7:AUTOREVAL_P | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                                                
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Primary Book Revaluation end.---');
-
---R book Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOREVAL'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => upper(P_PERIOD)
-				   ,ARGUMENT3     => NULL
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step7:AUTOREVAL_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step7:AUTOREVAL_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                                                                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Revaluation end.---');
-
---GERFP Auto Run 1/1 Revaluation
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Jan1 Revaluation begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_AUTO_RUN_PY_REVALUE'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => upper(P_PERIOD)
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step8:AUTOREVAL_JAN1 | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step8:AUTOREVAL_JAN1 | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                                                                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP;
-        END LOOP;     
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Jan1 Revaluation end.---');
-
---R book Post
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post begin.---');
-    V_REQ_ID := FND_REQUEST.SUBMIT_REQUEST( APPLICATION   => 'SQLGL'
-				   ,PROGRAM       => 'GERFP_GL_AUTOPOSTING'
-				   ,DESCRIPTION   => NULL
-				   ,START_TIME    => SYSDATE
-				   ,SUB_REQUEST   => FALSE
-				   ,ARGUMENT1     => 'R'
-				   ,ARGUMENT2     => Null
-				   );
-    Commit;	
-    IF V_REQ_ID=0 THEN
-        RAISE_APPLICATION_ERROR(-20160, FND_MESSAGE.GET);
-        X_STATUS := 'FAILED';
-    ELSE
-        X_STATUS := 'DONE';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step9:AUTOPOST_R | ' || V_REQ_ID || '|' || X_STATUS || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));
-        
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check begins.');
-        LOOP
-            V_Last_Req:=V_REQ_ID;        
-            IF NVL(V_Last_Req,0)=0 THEN 
-                EXIT;
-            END IF;
-
-            dbms_lock.sleep(60);
-            V_REQ_ID :=null;
-            FOR V_REQUEST IN C_QUEUE(V_USER_ID,V_Last_Req)
-            LOOP
-                
-                V_REQ_ID := V_REQUEST.REQUEST_ID;
-    
-                LOOP
-                    V_PHASE      				:= NULL;
-                    V_STATUS     				:= NULL;
-                    V_DEV_PHASE  				:= NULL;
-                    V_DEV_STATUS 				:= NULL;
-                    V_MESSAGE    				:= NULL;
-                    
-                    
-                    V_REQUEST_COMPLETE := APPS.FND_CONCURRENT.WAIT_FOR_REQUEST(V_REQ_ID,
-                                                                  	    10,
-                                                                        9999,
-                                                                    	V_PHASE,
-                                                                    	V_STATUS,
-                                                                    	V_DEV_PHASE,
-                                                                    	V_DEV_STATUS,
-                                                                    	V_MESSAGE);
-                    
-                    IF UPPER(V_PHASE) = 'COMPLETED' THEN
-                        FND_FILE.PUT_LINE(FND_FILE.LOG,'Step9:AUTOPOST_R | ' || V_REQ_ID || '|' || V_REQUEST.USER_CONCURRENT_PROGRAM_NAME || '(' || V_REQUEST.ARGUMENT_TEXT || ')|' || V_PHASE || '|' || V_STATUS || '|' || V_REQUEST.REQUEST_DATE || '|' || V_REQUEST.REQUESTED_START_DATE || '|' || V_REQUEST.ACTUAL_START_DATE || '|' || V_REQUEST.ACTUAL_COMPLETION_DATE || '|' || to_char(sysdate,'DD-MON-YYYY HH24:MI:SS'));                        
-                        EXIT;
-                    END IF;
-                END LOOP; 
-            END LOOP; 
-        END LOOP;    
-        FND_FILE.PUT_LINE(FND_FILE.LOG,'Quene check ends.');
-    END IF;    
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Reporting Book Post end.---');
-
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Status report begin.---');
---Status Report: GERFP_CCL_EMAIL/ CorpGBSRFPCCLORASIAinterfacealerts@ge.com
-    SEND_STATUS_REPORT(v_user_id,'CorpGBSRFPCCLORASIAinterfacealerts@ge.com',V_STAT,V_MSG);
-FND_FILE.PUT_LINE(FND_FILE.LOG,'---Status report end.---');
-               
-     --  statements ;
-   EXCEPTION
-      when E_Invalid_Period then 
-          retcode:=1;
-          
-      WHEN others THEN
-          retcode:=2; 
-          errbuff:=SQLERRM; 
-   END LaunchQueue;
-
-/* Send status mail */
-    PROCEDURE SEND_STATUS_REPORT(
-                    p_user_id IN number,
-                    P_RECIPIENTS    IN    VARCHAR2, 
-                    P_STAT         OUT    VARCHAR2,
-                    P_MSG          OUT    VARCHAR2)
-    IS
-
--- Till here 
-    
-    v_stng        VARCHAR2(4000);
-    v_step        integer;
-    v_step_name   varchar2(50);    
-    conn utl_smtp.connection;
-    
-    v_serverinfo varchar(200);
-    v_requestor Varchar(50);
-    v_sender    VARCHAR2(100) := 'oracle_user@ge.com';
-    
-    V_StartDate varchar(50);
-    V_EndDate varchar(50);
-    V_TotalDuration varchar(50);   
-    
+  PROCEDURE launchqueue(errbuff     OUT VARCHAR2,
+                        retcode     OUT VARCHAR2,
+                        p_period    IN VARCHAR2,
+                        p_rate_date IN VARCHAR2) IS
+    v_user_id          NUMBER;
+    v_req_id           NUMBER;
+    v_request_complete BOOLEAN;
+    v_phase            VARCHAR2(20);
+    v_status           VARCHAR2(20);
+    v_dev_phase        VARCHAR2(20);
+    v_dev_status       VARCHAR2(20);
+    v_message          VARCHAR2(200);
+  
+    v_last_req NUMBER;
+  
+    x_status VARCHAR2(20);
+  
+    v_us_year VARCHAR2(20);
+    v_us_date VARCHAR2(20);
+    e_invalid_period EXCEPTION;
+  
+    v_stat       VARCHAR2(20);
+    v_msg        VARCHAR2(20);
+    v_start_time NUMBER;
+  
+  BEGIN
+    x_status := NULL;
+  
+    fnd_global.set_nls_context(p_nls_language => 'AMERICAN');
+    apps.fnd_profile.get('USER_ID',
+                         v_user_id);
+    fnd_file.put_line(fnd_file.log,
+                      'The master request id is ' || v_conc_request);
+  
+    --Validate the input parameter: period      
     BEGIN
+      SELECT DISTINCT period_year,
+                      '15-' || period_name
+        INTO v_us_year,
+             v_us_date
+        FROM gl_period_statuses
+       WHERE application_id = 101
+         AND closing_status IN ('O')
+         AND period_type = '21'
+         AND adjustment_period_flag <> 'Y'
+         AND period_name = upper(p_period);
     
-    FND_FILE.PUT_LINE(FND_FILE.LOG,'Mail Sending...'); 
-    
-    SELECT UPPER(INSTANCE_NAME) || ' ON ' || HOST_NAME INTO V_SERVERINFO FROM V$INSTANCE;
-    
-    SELECT USER_NAME INTO V_REQUESTOR FROM FND_USER WHERE USER_ID=P_USER_ID; 
-    
-    SELECT TO_CHAR(ACTUAL_START_DATE,'DD-MON-YYYY HH24:MI:SS'),
-      TO_CHAR(NVL(ACTUAL_COMPLETION_DATE,SYSDATE),'DD-MON-YYYY HH24:MI:SS'),
-      ROUND((NVL(ACTUAL_COMPLETION_DATE,SYSDATE)-ACTUAL_START_DATE)* 86400,0) 
-      into V_STARTDATE,V_ENDDATE,V_TotalDuration
-      FROM FND_CONC_REQ_SUMMARY_V
-      WHERE REQUEST_ID=V_CONC_REQUEST ORDER BY REQUEST_ID;
-
-    conn := GERFP_CCL_MAIL.begin_mail(sender     => v_sender,
-                     recipients => p_recipients,
-                     subject    => 'Master Request Status Report',
-                     mime_type  => 'text/html');
-
-    v_stng := '<html><head><meta http-equiv="Content-Type" content="text/html; charset=GBK"></head>'
-          ||'<body><H1>Master Request Status Report </H1><BR>' 
-          || 'Server info      : ' || V_SERVERINFO || '<BR>'
-          || 'Master Request ID: ' || v_conc_request || '<BR>'
-          || 'Requestor        : ' || v_requestor || '<BR>'     
-          || 'Start Date       : ' || V_StartDate || '<BR>'
-          || 'End Date         : ' || V_EndDate || '<BR>'
-          || 'TotalDuration(s) : ' || V_TotalDuration || '</body></html>';
-          
-
-    GERFP_CCL_MAIL.write_text(conn    => conn,
-                 message => v_stng);
- 
-    GERFP_CCL_MAIL.end_mail( conn => conn );
-    FND_FILE.PUT_LINE(FND_FILE.LOG,'Mail Send.');  
-    p_stat :='S';
-
     EXCEPTION
-     WHEN OTHERS THEN
-        P_STAT := 'E';
-        FND_FILE.PUT_LINE(FND_FILE.LOG,' EXECEPTION IN PROCEDURE --> SEND_STATUS_REPORT'||SQLERRM);
-    END SEND_STATUS_REPORT;
+      WHEN no_data_found THEN
+        fnd_file.put_line(fnd_file.log,
+                          'Invalid Period: ' || p_period);
+        RAISE e_invalid_period;
+    END;
+  
+    posting(p_mrc_type => 'P');
+  
+    posting(p_mrc_type => 'P');
+  
+    posting(p_mrc_type => 'R');
+  
+    posting(p_mrc_type => 'R');
+  
+    remeasure(p_period    => upper(p_period),
+              p_rate_date => p_rate_date,
+              p_mrc_type  => 'P');
+  
+    posting(p_mrc_type => 'P');
+  
+    remeasure(p_period    => upper(p_period),
+              p_rate_date => p_rate_date,
+              p_mrc_type  => 'R');
+  
+    translate(p_period    => upper(p_period),
+              p_rate_date => p_rate_date);
+  
+    posting(p_mrc_type => 'R');
+  
+    ustax(p_period    => upper(p_period),
+          p_rate_date => p_rate_date,
+          p_us_year   => v_us_year,
+          p_us_date   => v_us_date);
+  
+    posting(p_mrc_type => 'P');
+  
+    translate(p_period    => upper(p_period),
+              p_rate_date => p_rate_date);
+  
+    posting(p_mrc_type => 'R');
+  
+    send_status_report(v_user_id,
+                       'g00360508@mail.ad.ge.com',
+                       v_stat,
+                       v_msg);
+  
+  EXCEPTION
+    WHEN e_invalid_period THEN
+      retcode := 1;
+    
+    WHEN OTHERS THEN
+      retcode := 2;
+      errbuff := SQLERRM;
+  END launchqueue;
 
+  /* Send status mail */
+  PROCEDURE send_status_report(p_user_id    IN NUMBER,
+                               p_recipients IN VARCHAR2,
+                               p_stat       OUT VARCHAR2,
+                               p_msg        OUT VARCHAR2) IS
+  
+    -- Till here 
+  
+    v_stng      VARCHAR2(4000);
+    v_step      INTEGER;
+    v_step_name VARCHAR2(50);
+    conn        utl_smtp.connection;
+  
+    v_serverinfo VARCHAR(200);
+    v_requestor  VARCHAR(50);
+    v_sender     VARCHAR2(100) := 'oracle_user@ge.com';
+  
+    v_startdate     VARCHAR(50);
+    v_enddate       VARCHAR(50);
+    v_totalduration VARCHAR(50);
+    v_start_time    NUMBER;
+  BEGIN
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': Sending Status Report begin.-----------------------');
+    v_start_time := dbms_utility.get_time;
+    fnd_file.put_line(fnd_file.log,
+                      'Mail Sending...');
+  
+    SELECT upper(instance_name) || ' ON ' || host_name
+      INTO v_serverinfo
+      FROM v$instance;
+  
+    SELECT user_name
+      INTO v_requestor
+      FROM fnd_user
+     WHERE user_id = p_user_id;
+  
+    SELECT to_char(actual_start_date,
+                   'DD-MON-YYYY HH24:MI:SS'),
+           to_char(nvl(actual_completion_date,
+                       SYSDATE),
+                   'DD-MON-YYYY HH24:MI:SS'),
+           round((nvl(actual_completion_date,
+                      SYSDATE) - actual_start_date) * 86400,
+                 0)
+      INTO v_startdate,
+           v_enddate,
+           v_totalduration
+      FROM fnd_conc_req_summary_v
+     WHERE request_id = v_conc_request
+     ORDER BY request_id;
+  
+    conn := gerfp_ccl_mail.begin_mail(sender     => v_sender,
+                                      recipients => p_recipients,
+                                      subject    => 'Master Request Status Report',
+                                      mime_type  => 'text/html');
+  
+    v_stng := '<html><head><meta http-equiv="Content-Type" content="text/html; charset=GBK"></head>' ||
+              '<body><H1>Master Request Status Report </H1><BR>' ||
+              'Server info      : ' || v_serverinfo || '<BR>' ||
+              'Master Request ID: ' || v_conc_request || '<BR>' ||
+              'Requestor        : ' || v_requestor || '<BR>' ||
+              'Start Date       : ' || v_startdate || '<BR>' ||
+              'End Date         : ' || v_enddate || '<BR>' ||
+              'TotalDuration(s) : ' || v_totalduration || '</body></html>';
+  
+    gerfp_ccl_mail.write_text(conn    => conn,
+                              message => v_stng);
+  
+    gerfp_ccl_mail.end_mail(conn => conn);
+    fnd_file.put_line(fnd_file.log,
+                      'Mail Send.');
+    p_stat := 'S';
+  
+    fnd_file.put_line(fnd_file.log,
+                      '-----------------------' ||
+                      to_char(SYSDATE,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      ': Sending Status Report. Elapsed Time:' ||
+                      (dbms_utility.get_time - v_start_time) / 100 ||
+                      '-----------------------');
+  
+  EXCEPTION
+    WHEN OTHERS THEN
+      p_stat := 'E';
+      fnd_file.put_line(fnd_file.log,
+                        ' EXECEPTION IN PROCEDURE --> SEND_STATUS_REPORT' ||
+                        SQLERRM);
+  END send_status_report;
 
-   -- Enter further code below as specified in the Package spec.
-END GERFP_MONTHEND;
+-- Enter further code below as specified in the Package spec.
+END gerfp_monthend;
 /

@@ -45,6 +45,7 @@ CREATE OR REPLACE PACKAGE gerfp_gl_reval_pub IS
                       p_me_code   IN VARCHAR2,
                       p_le_code   IN VARCHAR2,
                       p_book_type IN VARCHAR2,
+                      p_mrc_type  IN VARCHAR2,
                       p_sob_id    IN NUMBER,
                       p_period    IN VARCHAR2,
                       p_rate_date IN VARCHAR2);
@@ -61,6 +62,15 @@ CREATE OR REPLACE PACKAGE gerfp_gl_reval_pub IS
 END gerfp_gl_reval_pub;
 /
 CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
+
+--effective date
+-- error message
+-- request log
+-- performance
+
+  -- Author  : HW70001208
+  -- Created : 6/3/2012 9:54:31 PM
+  -- Purpose : 
 
   c_debug_switch CONSTANT VARCHAR2(1) := 'Y';
   g_error EXCEPTION;
@@ -2512,29 +2522,29 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     -- insert rounding ammount(DR)
     
     /*      IF abs(nvl(l_round_amount,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         0)) > 0 THEN
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                insert_staging_table(p_batch_id        => l_data_rec.batch_id,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_me_code         => l_data_rec.me_code,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_le_code         => l_data_rec.le_code,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_book_type       => l_data_rec.book_type,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_period          => l_data_rec.period,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_effective_date  => g_effective_date,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_account         => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_sob_id          => l_data_rec.sob_id,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_ccid            => g_rounding_ccid,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_currency_code   => l_data_rec.currency_code,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_entered_ytd     => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_accounted_ytd   => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_remeas_type     => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_rate_type       => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_rate            => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_accounted_dr    => l_round_amount,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_accounted_cr    => 0,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_status          => 'R',
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_msg             => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_variance_amount => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     p_source          => 'FX');
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              END IF;*/
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0)) > 0 THEN
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    insert_staging_table(p_batch_id        => l_data_rec.batch_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_me_code         => l_data_rec.me_code,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_le_code         => l_data_rec.le_code,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_book_type       => l_data_rec.book_type,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_period          => l_data_rec.period,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_effective_date  => g_effective_date,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_account         => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_sob_id          => l_data_rec.sob_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_ccid            => g_rounding_ccid,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_currency_code   => l_data_rec.currency_code,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_entered_ytd     => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_accounted_ytd   => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_remeas_type     => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_rate_type       => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_rate            => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_accounted_dr    => l_round_amount,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_accounted_cr    => 0,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_status          => 'R',
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_msg             => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_variance_amount => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_source          => 'FX');
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  END IF;*/
     
     END LOOP;
   
@@ -3018,21 +3028,21 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                    'Warning in procedure reval. Errors:' || l_message_p;
       debug_message(l_message);
       retcode := 1;
-      errbuf  := l_message;
+      -- errbuf  := l_message;
     WHEN g_error THEN
     
       l_message := l_message || chr(10) ||
                    'Errors in procedure reval. Errors:' || l_message_p;
       debug_message(l_message);
       retcode := 2;
-      errbuf  := l_message;
+      -- errbuf  := l_message;
     WHEN OTHERS THEN
     
       l_message := l_message || chr(10) ||
                    'Errors in procedure reval. Errors:' || SQLERRM;
       debug_message(l_message);
       retcode := 2;
-      errbuf  := l_message;
+      -- errbuf  := l_message;
   END;
 
   PROCEDURE remeasure_by_user(errbuf      OUT VARCHAR2,
@@ -3422,6 +3432,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                       p_me_code   IN VARCHAR2,
                       p_le_code   IN VARCHAR2,
                       p_book_type IN VARCHAR2,
+                      p_mrc_type  IN VARCHAR2,
                       p_sob_id    IN NUMBER,
                       p_period    IN VARCHAR2,
                       p_rate_date IN VARCHAR2) IS
@@ -3460,8 +3471,10 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
          AND sob.set_of_books_id =
              nvl(p_sob_id,
                  sob.set_of_books_id)
-         AND bus.export4 IN ('LC',
-                             'USD');
+         AND ((p_mrc_type = 'P' AND
+             bus.export4 IN ('LC',
+                               'USD')) OR
+             (p_mrc_type = 'R' AND bus.export4 = 'USD'));
   
   BEGIN
   
@@ -3469,6 +3482,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   p_me_code:' || p_me_code || '
   p_le_code:' || p_le_code || '
   p_book_type:' || p_book_type || '
+  p_mrc_type:' || p_mrc_type || '
   p_sob_id:' || p_sob_id || '
   p_period:' || p_period || '
   p_rate_date:' || p_rate_date);
@@ -3486,7 +3500,10 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       debug_message('functional currency: ' || l_data_rec.export4);
     
       -- functional currency
-      IF l_data_rec.export4 = 'LC' THEN
+      IF ((p_mrc_type = 'P' AND
+         l_data_rec.export4 IN ('LC',
+                                  'USD')) OR
+         (p_mrc_type = 'R' AND l_data_rec.export4 = 'USD')) THEN
       
         l_req_id := fnd_request.submit_request(application => 'XXRFP',
                                                program     => 'GERFPGR',
@@ -3497,83 +3514,26 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                argument2   => l_data_rec.me_code,
                                                argument3   => l_data_rec.le_code,
                                                argument4   => l_data_rec.book_type,
-                                               argument5   => 'P',
+                                               argument5   => p_mrc_type,
                                                argument6   => p_period,
                                                argument7   => p_rate_date,
                                                argument8   => c_source_remeasure);
       
         COMMIT;
       
-        debug_message('Submit Remeasurement in P Book. Request id :' ||
-                      l_req_id);
+        debug_message('Submit Remeasurement in ' || p_mrc_type ||
+                      ' Book. Request id :' || l_req_id);
       
         IF l_req_id = 0 THEN
           debug_message('Failed to submit Request. Errors:' ||
                         fnd_message.get);
+          retcode := 1;
         ELSE
         
           l_request_ids(nvl(l_request_ids.last, 0) + 1) := l_req_id;
         
         END IF;
       
-        -- functional currency
-      ELSIF l_data_rec.export4 = 'USD' THEN
-      
-        l_req_id := fnd_request.submit_request(application => 'XXRFP',
-                                               program     => 'GERFPGR',
-                                               description => NULL,
-                                               start_time  => SYSDATE,
-                                               sub_request => FALSE,
-                                               argument1   => to_char(l_batch_id),
-                                               argument2   => l_data_rec.me_code,
-                                               argument3   => l_data_rec.le_code,
-                                               argument4   => l_data_rec.book_type,
-                                               argument5   => 'P',
-                                               argument6   => p_period,
-                                               argument7   => p_rate_date,
-                                               argument8   => c_source_remeasure);
-      
-        COMMIT;
-        debug_message('Submit Remeasurement in P Book. Request id :' ||
-                      l_req_id);
-      
-        IF l_req_id = 0 THEN
-          debug_message('Failed to submit Request. Errors:' ||
-                        fnd_message.get);
-        ELSE
-        
-          l_request_ids(nvl(l_request_ids.last, 0) + 1) := l_req_id;
-        
-        END IF;
-      
-        l_req_id := fnd_request.submit_request(application => 'XXRFP',
-                                               program     => 'GERFPGR',
-                                               description => NULL,
-                                               start_time  => SYSDATE,
-                                               sub_request => FALSE,
-                                               argument1   => to_char(l_batch_id),
-                                               argument2   => l_data_rec.me_code,
-                                               argument3   => l_data_rec.le_code,
-                                               argument4   => l_data_rec.book_type,
-                                               argument5   => 'R',
-                                               argument6   => p_period,
-                                               argument7   => p_rate_date,
-                                               argument8   => c_source_remeasure);
-      
-        COMMIT;
-        debug_message('Submit Remeasurement in R Book. Request id :' ||
-                      l_req_id);
-      
-        IF l_req_id = 0 THEN
-          debug_message('Failed to submit Request. Errors:' ||
-                        fnd_message.get);
-        ELSE
-        
-          l_request_ids(nvl(l_request_ids.last, 0) + 1) := l_req_id;
-        
-        END IF;
-      
-        -- functional currency
       END IF;
     
     END LOOP;
@@ -3591,7 +3551,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     LOOP
     
       l_return_status := fnd_concurrent.wait_for_request(request_id => l_request_ids(l_idx),
-                                                         INTERVAL   => 5,
+                                                         INTERVAL   => 1,
                                                          max_wait   => 0,
                                                          phase      => l_phase,
                                                          status     => l_status,
@@ -3602,11 +3562,21 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       IF l_return_status = TRUE THEN
       
         debug_message('Request:' || l_request_ids(l_idx) || '|' || l_phase || '|' ||
-                      l_status);
+                      l_status || '|' || l_msg_data);
+      
+        IF l_phase != 'Completed'
+           OR l_status IN ('Cancelled',
+                           'Error',
+                           'Terminated') THEN
+        
+          retcode := 1;
+        
+        END IF;
       
       ELSE
       
-        debug_message('WAIT FOR REQUEST FAILED - STATUS UNKNOWN');
+        debug_message('WAIT FOR REQUEST:' || l_request_ids(l_idx) ||
+                      ' FAILED - STATUS UNKNOWN');
       
       END IF;
     
@@ -3745,6 +3715,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         IF l_req_id = 0 THEN
           debug_message('Failed to submit Request. Errors:' ||
                         fnd_message.get);
+          retcode := 1;
         ELSE
         
           l_request_ids(nvl(l_request_ids.last, 0) + 1) := l_req_id;
@@ -3769,7 +3740,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     LOOP
     
       l_return_status := fnd_concurrent.wait_for_request(request_id => l_request_ids(l_idx),
-                                                         INTERVAL   => 5,
+                                                         INTERVAL   => 1,
                                                          max_wait   => 0,
                                                          phase      => l_phase,
                                                          status     => l_status,
@@ -3780,11 +3751,21 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       IF l_return_status = TRUE THEN
       
         debug_message('Request:' || l_request_ids(l_idx) || '|' || l_phase || '|' ||
-                      l_status);
+                      l_status || '|' || l_msg_data);
+      
+        IF l_phase != 'Completed'
+           OR l_status IN ('Cancelled',
+                           'Error',
+                           'Terminated') THEN
+        
+          retcode := 1;
+        
+        END IF;
       
       ELSE
       
-        debug_message('WAIT FOR REQUEST FAILED - STATUS UNKNOWN');
+        debug_message('WAIT FOR REQUEST:' || l_request_ids(l_idx) ||
+                      ' FAILED - STATUS UNKNOWN');
       
       END IF;
     
