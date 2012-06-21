@@ -63,14 +63,13 @@ END gerfp_gl_reval_pub;
 /
 CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
 
---effective date
--- error message
--- request log
--- performance
+  -- error message
+  -- performance
 
   -- Author  : HW70001208
   -- Created : 6/3/2012 9:54:31 PM
   -- Purpose : 
+  g_pkg_name CONSTANT VARCHAR2(30) := upper('gerfp_gl_reval_pub');
 
   c_debug_switch CONSTANT VARCHAR2(1) := 'Y';
   g_error EXCEPTION;
@@ -129,32 +128,26 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
 
   PROCEDURE debug_message(p_message IN VARCHAR2) IS
   BEGIN
+  
     IF c_debug_switch = 'Y' THEN
-      IF fnd_global.conc_request_id = -1 THEN
-        dbms_output.put_line(p_message);
-      ELSE
-        fnd_file.put_line(fnd_file.log,
-                          p_message);
-      END IF;
+    
+      hw_log.info(p_message);
+    
     END IF;
-  EXCEPTION
+    /*  EXCEPTION
     WHEN OTHERS THEN
-      fnd_file.put_line(fnd_file.log,
-                        'Error occured in DEBUG_MESSAGE Procedure : ' ||
-                        SQLERRM);
-      dbms_output.put_line(p_message);
+      NULL;*/
   END debug_message;
 
   FUNCTION get_rate(p_rate_date          IN DATE,
                     p_rate_type          IN VARCHAR2,
                     p_from_currency_code IN VARCHAR2,
                     p_to_currency_code   IN VARCHAR2,
-                    x_message            OUT VARCHAR2,
-                    x_status             OUT VARCHAR2) RETURN NUMBER IS
+                    x_return_status      OUT VARCHAR2) RETURN NUMBER IS
     l_rate NUMBER;
-  
+    l_api_name CONSTANT VARCHAR2(30) := 'get_rate';
   BEGIN
-    x_status := g_ret_sts_success;
+    x_return_status := fnd_api.g_ret_sts_success;
   
     SELECT show_conversion_rate
       INTO l_rate
@@ -173,21 +166,26 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   EXCEPTION
     WHEN no_data_found THEN
     
-      x_status  := g_ret_sts_error;
-      x_message := 'Rate not defined. ' || p_rate_type ||
-                   ' rate from Currency:' || p_from_currency_code || ' to ' ||
-                   p_to_currency_code || ' on ' || p_rate_date;
-      debug_message(x_message);
+      x_return_status := fnd_api.g_ret_sts_unexp_error;
+      hw_api.stack_message('Rate not defined. ' || p_rate_type ||
+                           ' rate from Currency:' || p_from_currency_code ||
+                           ' to ' || p_to_currency_code || ' on ' ||
+                           p_rate_date);
+      RETURN 0;
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := fnd_api.g_ret_sts_error;
+      RETURN 0;
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := fnd_api.g_ret_sts_unexp_error;
+      RETURN 0;
+    WHEN OTHERS THEN
+      IF fnd_msg_pub.check_msg_level(fnd_msg_pub.g_msg_lvl_unexp_error) THEN
+        fnd_msg_pub.add_exc_msg(g_pkg_name,
+                                l_api_name);
+      END IF;
+      x_return_status := fnd_api.g_ret_sts_unexp_error;
       RETURN 0;
     
-    WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Error in getting ' || p_rate_type ||
-                   ' rate from Currency:' || p_from_currency_code || ' to ' ||
-                   p_to_currency_code || ' on ' || p_rate_date ||
-                   ', error:' || SQLERRM;
-      debug_message(x_message);
-      RETURN 0;
   END;
 
   PROCEDURE insert_staging_table(p_batch_id           IN NUMBER,
@@ -421,16 +419,23 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   END iface_insrt;
 
   --initialize global variables and validate on ledger level
-  PROCEDURE init_val_ledger(p_batch_id   IN NUMBER,
-                            p_me_code    IN VARCHAR2,
-                            p_le_code    IN VARCHAR2,
-                            p_book_type  IN VARCHAR2,
-                            p_mrc_type   IN VARCHAR2,
-                            p_period     IN VARCHAR2,
-                            p_rate_date  IN VARCHAR2,
-                            p_reval_type IN VARCHAR2,
-                            x_message    OUT VARCHAR2,
-                            x_status     OUT VARCHAR2) IS
+  PROCEDURE init_val_ledger(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
+                            p_commit        IN VARCHAR2 DEFAULT fnd_api.g_false,
+                            x_return_status OUT NOCOPY VARCHAR2,
+                            x_msg_count     OUT NOCOPY NUMBER,
+                            x_msg_data      OUT NOCOPY VARCHAR2,
+                            p_batch_id      IN NUMBER,
+                            p_me_code       IN VARCHAR2,
+                            p_le_code       IN VARCHAR2,
+                            p_book_type     IN VARCHAR2,
+                            p_mrc_type      IN VARCHAR2,
+                            p_period        IN VARCHAR2,
+                            p_rate_date     IN VARCHAR2,
+                            p_reval_type    IN VARCHAR2) IS
+  
+    l_api_name       CONSTANT VARCHAR2(30) := 'init_val_ledger';
+    l_savepoint_name CONSTANT VARCHAR2(30) := 'init_val_ledger';
+    l_procedure_status VARCHAR2(30);
   
     l_p_sob_id NUMBER;
     l_r_sob_id NUMBER;
@@ -452,14 +457,22 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     l_lock_hanlder          VARCHAR2(32767);
     l_lock_result           NUMBER;
   
+    l_period_start_date DATE;
+    l_period_end_date   DATE;
+  
   BEGIN
+  
+    x_return_status := hw_api.start_activity(p_pkg_name       => g_pkg_name,
+                                             p_api_name       => l_api_name,
+                                             p_savepoint_name => l_savepoint_name,
+                                             p_init_msg_list  => p_init_msg_list);
+  
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
   
     debug_message('----------------------' ||
                   'Start initialize and validate on ledger level' ||
                   '----------------------');
-  
-    x_status := g_ret_sts_success;
-  
     debug_message('request lock');
     dbms_lock.allocate_unique('gerfp_gl_reval_pub:' || p_me_code || '.' ||
                               p_le_code || '.' || p_book_type || '.' ||
@@ -469,11 +482,13 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                        lockmode          => dbms_lock.x_mode,
                                        timeout           => 0,
                                        release_on_commit => FALSE);
-    IF l_lock_result <> 0 THEN
-      x_message := 'failed to request lock for ledger :' || p_me_code || '.' ||
-                   p_le_code || '.' || p_book_type || ' IN Book-' ||
-                   p_mrc_type || '. Lock result:' || l_lock_result;
-      RAISE g_error;
+    IF l_lock_result NOT IN (0,
+                             4) THEN
+      hw_api.stack_message('failed to request lock for ledger :' ||
+                           p_me_code || '.' || p_le_code || '.' ||
+                           p_book_type || ' IN Book-' || p_mrc_type ||
+                           '. Lock result:' || l_lock_result);
+      RAISE fnd_api.g_exc_unexpected_error;
     
     ELSE
       debug_message('got lock:' || l_lock_hanlder);
@@ -495,14 +510,15 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     debug_message('Reval Type=' || g_reval_type);
     IF g_reval_type NOT IN (c_source_translate,
                             c_source_remeasure) THEN
-      x_message := 'wrong Reval Type=' || g_reval_type;
-      RAISE g_error;
+      hw_api.stack_message('wrong Reval Type=' || g_reval_type);
+      RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
     IF p_mrc_type NOT IN ('P',
                           'R') THEN
-      x_message := 'wrong mrc_type:' || p_mrc_type;
-      RAISE g_error;
+    
+      hw_api.stack_message('wrong mrc_type:' || p_mrc_type);
+      RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
     g_mrc_type := p_mrc_type;
@@ -523,8 +539,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     END IF;
   
     IF g_sob_id = -1 THEN
-      x_message := 'failed to get SOB. ';
-      RAISE g_error;
+      hw_api.stack_message('failed to get SOB. ');
+      RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
     debug_message('g_sob_id=' || g_sob_id || ';g_psob_id=' || g_psob_id ||
@@ -543,8 +559,10 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     EXCEPTION
       WHEN OTHERS THEN
-        x_message := 'Error in getting SOB information, error:' || SQLERRM;
-        RAISE g_error;
+      
+        hw_api.stack_message('Error in getting SOB information, error:' ||
+                             SQLERRM);
+        RAISE fnd_api.g_exc_unexpected_error;
     END;
   
     BEGIN
@@ -560,8 +578,9 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     EXCEPTION
       WHEN OTHERS THEN
-        x_message := 'Error in getting PSOB information, error:' || SQLERRM;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting PSOB information, error:' ||
+                             SQLERRM);
+        RAISE fnd_api.g_exc_unexpected_error;
     END;
   
     BEGIN
@@ -597,20 +616,26 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     EXCEPTION
       WHEN OTHERS THEN
-        x_message := 'Error in getting BUS information, error:' || SQLERRM;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting BUS information, error:' ||
+                             SQLERRM);
+        RAISE fnd_api.g_exc_unexpected_error;
+      
     END;
   
     IF nvl(l_fx_enable_flag,
            'N') != 'Y' THEN
-      x_message := 'The Ledger does not enable FX program';
-      RAISE g_error;
+    
+      hw_api.stack_message('The Ledger does not enable FX program');
+      RAISE fnd_api.g_exc_unexpected_error;
+    
     END IF;
   
     IF nvl(l_bus_enable_flag,
            'N') != 'Y' THEN
-      x_message := 'The Ledger is disabled';
-      RAISE g_error;
+    
+      hw_api.stack_message('The Ledger is disabled');
+      RAISE fnd_api.g_exc_unexpected_error;
+    
     END IF;
   
     --validate local currency
@@ -618,8 +643,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     IF g_fc IS NULL
        OR g_fc NOT IN ('LC',
                        'USD') THEN
-      x_message := 'Local Currency:' || g_fc || ' is invalid';
-      RAISE g_error;
+      hw_api.stack_message('Local Currency:' || g_fc || ' is invalid');
+      RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
     --validate line of business of ME
@@ -633,45 +658,55 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     EXCEPTION
       WHEN no_data_found THEN
-        x_message := 'ME:' || p_me_code || ' not exist in CCL';
-        RAISE g_error;
+        hw_api.stack_message('ME:' || p_me_code || ' not exist in CCL');
+        RAISE fnd_api.g_exc_unexpected_error;
       WHEN OTHERS THEN
-        x_message := 'Error in getting CCL ME , error:' || SQLERRM;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting CCL ME , error:' || SQLERRM);
+        RAISE fnd_api.g_exc_unexpected_error;
     END;
   
     IF g_me_line_of_business IS NULL
        OR
        g_me_line_of_business NOT IN ('F',
                                      'I') THEN
-      x_message := 'line of business of ME:' || g_me_line_of_business ||
-                   ' is invalid';
-      RAISE g_error;
+      hw_api.stack_message('line of business of ME:' ||
+                           g_me_line_of_business || ' is invalid');
+      RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
     ---validation period
     BEGIN
     
       SELECT t.closing_status,
+             t.start_date,
              t.end_date
         INTO l_closing_status,
-             g_effective_date
+             l_period_start_date,
+             l_period_end_date
         FROM gl_period_statuses t
        WHERE t.set_of_books_id = g_sob_id
          AND t.period_name = p_period
          AND t.application_id = 101;
     EXCEPTION
       WHEN OTHERS THEN
-        x_message := 'Error in getting Period, error:' || SQLERRM;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting Period, error:' || SQLERRM);
+        RAISE fnd_api.g_exc_unexpected_error;
     END;
   
     IF nvl(l_closing_status,
            'C') != 'O' THEN
-      x_message := 'Period is not open';
-      RAISE g_error;
+      hw_api.stack_message('Period is not open');
+      RAISE fnd_api.g_exc_unexpected_error;
     
     END IF;
+  
+    IF trunc(SYSDATE) BETWEEN l_period_start_date AND l_period_end_date THEN
+      g_effective_date := trunc(SYSDATE);
+    ELSE
+      g_effective_date := l_period_end_date;
+    END IF;
+  
+    debug_message('Effective Date:' || g_effective_date);
   
     l_cta_concat_segments := p_me_code || '.' || p_le_code || '.' ||
                              p_book_type || '.' || l_cta_account || '.' ||
@@ -698,9 +733,10 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       IF nvl(g_fx_ccid,
              0) <= 0 THEN
       
-        x_message := 'Error in getting FX CCID for segments:' ||
-                     l_fx_concat_segments || '. error:' || fnd_message.get;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting FX CCID for segments:' ||
+                             l_fx_concat_segments || '. error:' ||
+                             fnd_message.get);
+        RAISE fnd_api.g_exc_unexpected_error;
       
       END IF;
     END IF;
@@ -716,9 +752,10 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       IF nvl(g_cta_ccid,
              0) <= 0 THEN
       
-        x_message := 'Error in getting CTA CCID for segments:' ||
-                     l_cta_concat_segments || '. error:' || fnd_message.get;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting CTA CCID for segments:' ||
+                             l_cta_concat_segments || '. error:' ||
+                             fnd_message.get);
+        RAISE fnd_api.g_exc_unexpected_error;
       
       END IF;
     END IF;
@@ -753,26 +790,49 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     debug_message('currency precision:' || g_precision);
     debug_message('threshold_amount:' || g_threshold_amount);
   
+    x_return_status := hw_api.end_activity(p_pkg_name         => g_pkg_name,
+                                           p_api_name         => l_api_name,
+                                           p_commit           => p_commit,
+                                           p_procedure_status => l_procedure_status,
+                                           x_msg_count        => x_msg_count,
+                                           x_msg_data         => x_msg_data);
   EXCEPTION
-    WHEN g_error THEN
-    
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure init_val_ledger. Errors:' ||
-                   x_message;
-      debug_message(x_message);
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_error,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_unexp,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure init_val_ledger. Errors:' ||
-                   SQLERRM;
-      debug_message(x_message);
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_others,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     
   END;
 
-  PROCEDURE cal_remeasure(p_ccid         IN NUMBER,
-                          p_remeas_value IN VARCHAR2,
-                          x_results      OUT g_staging_table_t,
-                          x_message      OUT VARCHAR2,
-                          x_status       OUT VARCHAR2) IS
+  PROCEDURE cal_remeasure(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
+                          p_commit        IN VARCHAR2 DEFAULT fnd_api.g_false,
+                          x_return_status OUT NOCOPY VARCHAR2,
+                          x_msg_count     OUT NOCOPY NUMBER,
+                          x_msg_data      OUT NOCOPY VARCHAR2,
+                          p_ccid          IN NUMBER,
+                          p_remeas_value  IN VARCHAR2,
+                          x_results       OUT g_staging_table_t) IS
+  
+    l_api_name       CONSTANT VARCHAR2(30) := 'cal_remeasure';
+    l_savepoint_name CONSTANT VARCHAR2(30) := 'cal_remeasure';
+    l_procedure_status VARCHAR2(30);
   
     CURSOR l_data_crs IS
       SELECT gb.code_combination_id,
@@ -821,7 +881,13 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
   BEGIN
   
-    x_status := g_ret_sts_success;
+    x_return_status := hw_api.start_activity(p_pkg_name       => g_pkg_name,
+                                             p_api_name       => l_api_name,
+                                             p_savepoint_name => l_savepoint_name,
+                                             p_init_msg_list  => p_init_msg_list);
+  
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
   
     FOR l_data_rec IN l_data_crs
     LOOP
@@ -842,11 +908,9 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                               l_rate_type,
                               l_data_rec.currency_code,
                               g_sob_currency,
-                              l_error_msg,
-                              l_status);
-      IF l_status <> g_ret_sts_success THEN
-        RAISE g_error;
-      END IF;
+                              x_return_status => x_return_status);
+      hw_api.raise_exception(p_return_status     => x_return_status,
+                             px_procedure_status => l_procedure_status);
     
       --insert revaluation for each line
     
@@ -884,26 +948,47 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     END LOOP;
   
+    x_return_status := hw_api.end_activity(p_pkg_name         => g_pkg_name,
+                                           p_api_name         => l_api_name,
+                                           p_commit           => p_commit,
+                                           p_procedure_status => l_procedure_status,
+                                           x_msg_count        => x_msg_count,
+                                           x_msg_data         => x_msg_data);
   EXCEPTION
-    WHEN g_error THEN
-    
-      x_status  := g_ret_sts_error;
-      x_message := l_error_msg;
-      debug_message('Errors in procedure cal_remeasure. Errors:' ||
-                    x_message);
-    
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_error,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_unexp,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure cal_remeasure. Errors:' || SQLERRM;
-      debug_message(x_message);
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_others,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
   END;
 
-  PROCEDURE cal_translate(p_ccid         IN NUMBER,
-                          p_remeas_value IN VARCHAR2,
-                          x_results      OUT g_staging_table_t,
-                          x_message      OUT VARCHAR2,
-                          x_status       OUT VARCHAR2) IS
-  
+  PROCEDURE cal_translate(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
+                          p_commit        IN VARCHAR2 DEFAULT fnd_api.g_false,
+                          x_return_status OUT NOCOPY VARCHAR2,
+                          x_msg_count     OUT NOCOPY NUMBER,
+                          x_msg_data      OUT NOCOPY VARCHAR2,
+                          p_ccid          IN NUMBER,
+                          p_remeas_value  IN VARCHAR2,
+                          x_results       OUT g_staging_table_t) IS
+    l_api_name       CONSTANT VARCHAR2(30) := 'cal_translate';
+    l_savepoint_name CONSTANT VARCHAR2(30) := 'cal_translate';
+    l_procedure_status VARCHAR2(30);
     CURSOR l_data_crs IS
       SELECT gcc.code_combination_id,
              sob2.currency_code psob_curr,
@@ -959,7 +1044,13 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
   BEGIN
   
-    x_status := g_ret_sts_success;
+    x_return_status := hw_api.start_activity(p_pkg_name       => g_pkg_name,
+                                             p_api_name       => l_api_name,
+                                             p_savepoint_name => l_savepoint_name,
+                                             p_init_msg_list  => p_init_msg_list);
+  
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
   
     FOR l_data_rec IN l_data_crs
     LOOP
@@ -978,11 +1069,9 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                               l_rate_type,
                               l_data_rec.psob_curr,
                               g_sob_currency,
-                              l_error_msg,
-                              l_status);
-      IF l_status <> g_ret_sts_success THEN
-        RAISE g_error;
-      END IF;
+                              x_return_status => x_return_status);
+      hw_api.raise_exception(p_return_status     => x_return_status,
+                             px_procedure_status => l_procedure_status);
     
       --insert revaluation for each line
       l_variance_amount := nvl(l_data_rec.p_accounted_ytd,
@@ -1018,32 +1107,47 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     END LOOP;
   
+    x_return_status := hw_api.end_activity(p_pkg_name         => g_pkg_name,
+                                           p_api_name         => l_api_name,
+                                           p_commit           => p_commit,
+                                           p_procedure_status => l_procedure_status,
+                                           x_msg_count        => x_msg_count,
+                                           x_msg_data         => x_msg_data);
   EXCEPTION
-    WHEN g_error THEN
-    
-      x_status  := g_ret_sts_error;
-      x_message := l_error_msg;
-      debug_message('Errors in procedure cal_remeasure. Errors:' ||
-                    x_message);
-    
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_error,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_unexp,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure cal_translate. Errors:' || SQLERRM;
-      debug_message(x_message);
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_others,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
   END;
 
-  PROCEDURE validate_account(p_account      IN VARCHAR2,
-                             x_remeas_value OUT VARCHAR2,
-                             x_message      OUT VARCHAR2,
-                             x_status       OUT VARCHAR2) IS
-  
+  PROCEDURE validate_account(p_account       IN VARCHAR2,
+                             x_remeas_value  OUT VARCHAR2,
+                             x_return_status OUT VARCHAR2) IS
+    l_api_name CONSTANT VARCHAR2(30) := 'validate_account';
     l_line_of_business    VARCHAR2(100);
     l_account_enable_flag VARCHAR2(100);
     l_remeas_trans        VARCHAR2(100);
   
   BEGIN
   
-    x_status := g_ret_sts_success;
+    x_return_status := fnd_api.g_ret_sts_success;
     --get CCL ACCOUNT 
     BEGIN
     
@@ -1065,27 +1169,29 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     EXCEPTION
       WHEN no_data_found THEN
       
-        x_message := 'Account:' || p_account || ' not exist in CCL';
-        RAISE g_error;
+        hw_api.stack_message('Account:' || p_account ||
+                             ' not exist in CCL');
+        RAISE fnd_api.g_exc_unexpected_error;
       
       WHEN OTHERS THEN
       
-        x_message := 'Error in getting CCL ACCOUNT:' || p_account ||
-                     'error:' || SQLERRM;
-        RAISE g_error;
+        hw_api.stack_message('Error in getting CCL ACCOUNT:' || p_account ||
+                             'error:' || SQLERRM);
+        RAISE fnd_api.g_exc_unexpected_error;
       
     END;
   
     IF l_account_enable_flag <> 'Y' THEN
-      x_message := 'Account:' || p_account || ' is disabled in CCL';
-      RAISE g_error;
+      hw_api.stack_message('Account:' || p_account ||
+                           ' is disabled in CCL');
+      RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
     IF NOT (l_line_of_business = 'ALL' OR
         g_me_line_of_business = l_line_of_business) THEN
     
-      x_message := 'line_of_business is conflict on account level and ME level';
-      RAISE g_error;
+      hw_api.stack_message('line_of_business is conflict on account level and ME level');
+      RAISE fnd_api.g_exc_unexpected_error;
     
     END IF;
   
@@ -1112,29 +1218,36 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                 '6',
                                 '7'))) THEN
     
-      x_message := 'remeas_value:' || x_remeas_value || ' is invalid';
-      RAISE g_error;
+      hw_api.stack_message('remeas_value:' || x_remeas_value ||
+                           ' is invalid');
+      RAISE fnd_api.g_exc_unexpected_error;
     
     END IF;
   EXCEPTION
-    WHEN g_error THEN
-    
-      debug_message('Failed to validate this account, As ' || x_message);
-      x_message := x_message;
-      x_status  := g_ret_sts_error;
-    
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := fnd_api.g_ret_sts_error;
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := fnd_api.g_ret_sts_unexp_error;
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure validate_account. Errors:' ||
-                   SQLERRM;
-      debug_message(x_message);
+      IF fnd_msg_pub.check_msg_level(fnd_msg_pub.g_msg_lvl_unexp_error) THEN
+        fnd_msg_pub.add_exc_msg(g_pkg_name,
+                                l_api_name);
+      END IF;
+      x_return_status := fnd_api.g_ret_sts_unexp_error;
     
   END;
 
-  PROCEDURE cal_by_ccid(p_ccid    IN NUMBER,
-                        x_results OUT g_staging_table_t,
-                        x_message OUT VARCHAR2,
-                        x_status  OUT VARCHAR2) IS
+  PROCEDURE cal_by_ccid(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
+                        p_commit        IN VARCHAR2 DEFAULT fnd_api.g_false,
+                        x_return_status OUT NOCOPY VARCHAR2,
+                        x_msg_count     OUT NOCOPY NUMBER,
+                        x_msg_data      OUT NOCOPY VARCHAR2,
+                        p_ccid          IN NUMBER,
+                        x_results       OUT g_staging_table_t) IS
+  
+    l_api_name       CONSTANT VARCHAR2(30) := 'cal_by_ccid';
+    l_savepoint_name CONSTANT VARCHAR2(30) := 'cal_by_ccid';
+    l_procedure_status VARCHAR2(30);
   
     l_remeas_value VARCHAR2(100);
     l_error_msg    VARCHAR2(32637);
@@ -1152,7 +1265,14 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
        WHERE gcc.code_combination_id = p_ccid;
   
   BEGIN
-    x_status := g_ret_sts_success;
+  
+    x_return_status := hw_api.start_activity(p_pkg_name       => g_pkg_name,
+                                             p_api_name       => l_api_name,
+                                             p_savepoint_name => l_savepoint_name,
+                                             p_init_msg_list  => p_init_msg_list);
+  
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
   
     OPEN l_data_crs;
     FETCH l_data_crs
@@ -1164,13 +1284,11 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     debug_message('start processing  CCID:' || l_code_combination_id || ' ' ||
                   l_concatenated_segments);
   
-    validate_account(p_account      => l_account,
-                     x_remeas_value => l_remeas_value,
-                     x_message      => l_error_msg,
-                     x_status       => l_status);
-    IF l_status <> g_ret_sts_success THEN
-      RAISE g_error;
-    END IF;
+    validate_account(p_account       => l_account,
+                     x_remeas_value  => l_remeas_value,
+                     x_return_status => x_return_status);
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
   
     --functional currency
     IF g_fc = 'LC' THEN
@@ -1185,15 +1303,17 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
           IF g_reval_type = c_source_remeasure THEN
           
-            cal_remeasure(p_ccid         => l_code_combination_id,
-                          p_remeas_value => l_remeas_value,
-                          x_results      => x_results,
-                          x_message      => l_error_msg,
-                          x_status       => l_status);
+            cal_remeasure(p_init_msg_list => fnd_api.g_true,
+                          p_commit        => fnd_api.g_false,
+                          x_return_status => x_return_status,
+                          x_msg_count     => x_msg_count,
+                          x_msg_data      => x_msg_data,
+                          p_ccid          => l_code_combination_id,
+                          p_remeas_value  => l_remeas_value,
+                          x_results       => x_results);
           
-            IF l_status != g_ret_sts_success THEN
-              RAISE g_error;
-            END IF;
+            hw_api.raise_exception(p_return_status     => x_return_status,
+                                   px_procedure_status => l_procedure_status);
           
           END IF;
         
@@ -1202,7 +1322,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
           l_error_msg := 'The Account is not in remeasurement scope. remeas_value: ' ||
                          l_remeas_value;
-          RAISE g_skip_record;
+          GOTO skip_record;
         
           --Remeas Value
         END IF;
@@ -1222,15 +1342,17 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
           IF g_reval_type = c_source_translate THEN
           
-            cal_translate(p_ccid         => l_code_combination_id,
-                          p_remeas_value => l_remeas_value,
-                          x_results      => x_results,
-                          x_message      => l_error_msg,
-                          x_status       => l_status);
+            cal_translate(p_init_msg_list => fnd_api.g_true,
+                          p_commit        => fnd_api.g_false,
+                          x_return_status => x_return_status,
+                          x_msg_count     => x_msg_count,
+                          x_msg_data      => x_msg_data,
+                          p_ccid          => l_code_combination_id,
+                          p_remeas_value  => l_remeas_value,
+                          x_results       => x_results);
           
-            IF l_status != g_ret_sts_success THEN
-              RAISE g_error;
-            END IF;
+            hw_api.raise_exception(p_return_status     => x_return_status,
+                                   px_procedure_status => l_procedure_status);
           
           END IF;
         
@@ -1239,7 +1361,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
           l_error_msg := 'The Account is not in translating scope. remeas_value: ' ||
                          l_remeas_value;
-          RAISE g_skip_record;
+          GOTO skip_record;
         
           --Remeas Value
         END IF;
@@ -1264,15 +1386,17 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                               '1') THEN
         
           IF g_reval_type = c_source_remeasure THEN
-            cal_remeasure(p_ccid         => l_code_combination_id,
-                          p_remeas_value => l_remeas_value,
-                          x_results      => x_results,
-                          x_message      => l_error_msg,
-                          x_status       => l_status);
+            cal_remeasure(p_init_msg_list => fnd_api.g_true,
+                          p_commit        => fnd_api.g_false,
+                          x_return_status => x_return_status,
+                          x_msg_count     => x_msg_count,
+                          x_msg_data      => x_msg_data,
+                          p_ccid          => l_code_combination_id,
+                          p_remeas_value  => l_remeas_value,
+                          x_results       => x_results);
           
-            IF l_status != g_ret_sts_success THEN
-              RAISE g_error;
-            END IF;
+            hw_api.raise_exception(p_return_status     => x_return_status,
+                                   px_procedure_status => l_procedure_status);
           
           END IF;
         
@@ -1281,7 +1405,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
           l_error_msg := 'The Account is not in remeasurement scope. remeas_value: ' ||
                          l_remeas_value;
-          RAISE g_skip_record;
+          GOTO skip_record;
         
           --Remeas Value
         END IF;
@@ -1295,15 +1419,17 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                               '1') THEN
         
           IF g_reval_type = c_source_remeasure THEN
-            cal_remeasure(p_ccid         => l_code_combination_id,
-                          p_remeas_value => l_remeas_value,
-                          x_results      => x_results,
-                          x_message      => l_error_msg,
-                          x_status       => l_status);
+            cal_remeasure(p_init_msg_list => fnd_api.g_true,
+                          p_commit        => fnd_api.g_false,
+                          x_return_status => x_return_status,
+                          x_msg_count     => x_msg_count,
+                          x_msg_data      => x_msg_data,
+                          p_ccid          => l_code_combination_id,
+                          p_remeas_value  => l_remeas_value,
+                          x_results       => x_results);
           
-            IF l_status != g_ret_sts_success THEN
-              RAISE g_error;
-            END IF;
+            hw_api.raise_exception(p_return_status     => x_return_status,
+                                   px_procedure_status => l_procedure_status);
           
           END IF;
         
@@ -1312,7 +1438,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
           l_error_msg := 'The Account is not in translating scope. remeas_value: ' ||
                          l_remeas_value;
-          RAISE g_skip_record;
+          GOTO skip_record;
         
           --Remeas Value
         END IF;
@@ -1320,40 +1446,63 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         --MRC type
       ELSE
       
-        l_error_msg := 'MAC Type:' || g_mrc_type || ' is invalid';
-        RAISE g_error;
+        hw_api.stack_message('MAC Type:' || g_mrc_type || ' is invalid');
+        RAISE fnd_api.g_exc_unexpected_error;
       
       END IF;
     
       --functional currency
     ELSE
     
-      l_error_msg := 'Local Currency:' || g_fc || ' is invalid';
-      RAISE g_error;
+      hw_api.stack_message('Local Currency:' || g_fc || ' is invalid');
+      RAISE fnd_api.g_exc_unexpected_error;
     
       --functional currency
     END IF;
   
-  EXCEPTION
+    <<skip_record>>
+    debug_message('Skip this record, As ' || l_error_msg);
+    x_return_status := hw_api.end_activity(p_pkg_name         => g_pkg_name,
+                                           p_api_name         => l_api_name,
+                                           p_commit           => p_commit,
+                                           p_procedure_status => l_procedure_status,
+                                           x_msg_count        => x_msg_count,
+                                           x_msg_data         => x_msg_data);
   
-    WHEN g_skip_record THEN
-      debug_message('Skip this record, As ' || l_error_msg);
-    
-    WHEN g_error THEN
-    
-      debug_message('Failed to process this record, As ' || l_error_msg);
-      x_message := l_error_msg;
-      x_status  := g_ret_sts_warning;
-    
+  EXCEPTION
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_error,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_unexp,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure cal_by_ccid. Errors:' || SQLERRM;
-      debug_message(x_message);
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_others,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     
   END;
 
-  PROCEDURE cal_standard(x_message OUT VARCHAR2,
-                         x_status  OUT VARCHAR2) IS
+  PROCEDURE cal_standard(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
+                         p_commit        IN VARCHAR2 DEFAULT fnd_api.g_false,
+                         x_return_status OUT NOCOPY VARCHAR2,
+                         x_msg_count     OUT NOCOPY NUMBER,
+                         x_msg_data      OUT NOCOPY VARCHAR2) IS
+  
+    l_api_name       CONSTANT VARCHAR2(30) := 'cal_standard';
+    l_savepoint_name CONSTANT VARCHAR2(30) := 'cal_standard';
+    l_procedure_status VARCHAR2(30);
   
     TYPE l_data_crs_tp IS REF CURSOR;
     l_data_crs l_data_crs_tp;
@@ -1369,10 +1518,16 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
   BEGIN
   
+    x_return_status := hw_api.start_activity(p_pkg_name       => g_pkg_name,
+                                             p_api_name       => l_api_name,
+                                             p_savepoint_name => l_savepoint_name,
+                                             p_init_msg_list  => p_init_msg_list);
+  
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
+  
     debug_message('----------------------' || 'Start cal standard' ||
                   '----------------------');
-  
-    x_status := g_ret_sts_success;
   
     IF g_reval_type = c_source_remeasure THEN
     
@@ -1469,10 +1624,13 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
           RAISE g_skip_record_exception;
         END IF;
       
-        cal_by_ccid(p_ccid    => l_code_combination_id,
-                    x_results => l_results,
-                    x_message => l_error_msg,
-                    x_status  => l_status);
+        cal_by_ccid(p_init_msg_list => fnd_api.g_true,
+                    p_commit        => fnd_api.g_false,
+                    x_return_status => x_return_status,
+                    x_msg_count     => x_msg_count,
+                    x_msg_data      => x_msg_data,
+                    p_ccid          => l_code_combination_id,
+                    x_results       => l_results);
       
         IF l_status <> g_ret_sts_success THEN
           RAISE g_skip_record_exception;
@@ -1521,7 +1679,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
           debug_message('Failed to process this record, As ' ||
                         l_error_msg);
         
-          x_status := g_ret_sts_warning;
+          l_procedure_status := hw_api.g_ret_sts_warning;
+        
           insert_staging_table(p_batch_id        => g_batch_id,
                                p_me_code         => g_me_code,
                                p_le_code         => g_le_code,
@@ -1550,7 +1709,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                          SQLERRM;
           debug_message('Failed to process this record, As ' || SQLERRM);
         
-          x_status := g_ret_sts_warning;
+          l_procedure_status := hw_api.g_ret_sts_warning;
+        
           insert_staging_table(p_batch_id        => g_batch_id,
                                p_me_code         => g_me_code,
                                p_le_code         => g_le_code,
@@ -1578,22 +1738,51 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
     END LOOP ccid_loop;
   
-    IF x_status = g_ret_sts_warning THEN
-      x_message := 'some records failed in procedure cal_standard.';
-      debug_message(x_message);
+    IF l_procedure_status = hw_api.g_ret_sts_warning THEN
+      hw_api.stack_message('some records failed in procedure cal_standard.');
     END IF;
   
-  EXCEPTION
+    x_return_status := hw_api.end_activity(p_pkg_name         => g_pkg_name,
+                                           p_api_name         => l_api_name,
+                                           p_commit           => p_commit,
+                                           p_procedure_status => l_procedure_status,
+                                           x_msg_count        => x_msg_count,
+                                           x_msg_data         => x_msg_data);
   
+  EXCEPTION
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_error,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_unexp,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure cal_standard. Errors:' || SQLERRM;
-      debug_message(x_message);
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_others,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     
   END;
 
-  PROCEDURE cal_777(x_message OUT VARCHAR2,
-                    x_status  OUT VARCHAR2) IS
+  PROCEDURE cal_777(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
+                    p_commit        IN VARCHAR2 DEFAULT fnd_api.g_false,
+                    x_return_status OUT NOCOPY VARCHAR2,
+                    x_msg_count     OUT NOCOPY NUMBER,
+                    x_msg_data      OUT NOCOPY VARCHAR2) IS
+  
+    l_api_name       CONSTANT VARCHAR2(30) := 'cal_777';
+    l_savepoint_name CONSTANT VARCHAR2(30) := 'cal_777';
+    l_procedure_status VARCHAR2(30);
   
     TYPE l_data_crs_tp IS REF CURSOR;
     l_data_crs l_data_crs_tp;
@@ -1633,7 +1822,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
          AND t.me_code = g_me_code
          AND t.le_code = g_le_code
          AND t.book_type = g_book_type
-         AND t.status = '777'
+         AND t.status = g_record_status_skip
          AND t.sob_id = g_sob_id
        GROUP BY t.account_777,
                 t.account_776,
@@ -1641,9 +1830,16 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
   BEGIN
   
+    x_return_status := hw_api.start_activity(p_pkg_name       => g_pkg_name,
+                                             p_api_name       => l_api_name,
+                                             p_savepoint_name => l_savepoint_name,
+                                             p_init_msg_list  => p_init_msg_list);
+  
+    hw_api.raise_exception(p_return_status     => x_return_status,
+                           px_procedure_status => l_procedure_status);
+  
     debug_message('----------------------' || 'Start cal 777' ||
                   '----------------------');
-    x_status := g_ret_sts_success;
   
     IF g_reval_type = c_source_remeasure THEN
     
@@ -1834,12 +2030,16 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         
         END IF;
       
-        cal_by_ccid(p_ccid    => l_code_combination_id,
-                    x_results => l_results,
-                    x_message => l_error_msg,
-                    x_status  => l_status);
+        cal_by_ccid(p_init_msg_list => fnd_api.g_true,
+                    p_commit        => fnd_api.g_false,
+                    x_return_status => x_return_status,
+                    x_msg_count     => x_msg_count,
+                    x_msg_data      => x_msg_data,
+                    p_ccid          => l_code_combination_id,
+                    x_results       => l_results);
       
-        IF l_status <> g_ret_sts_success THEN
+        IF x_return_status <> fnd_api.g_ret_sts_success THEN
+          l_error_msg := x_msg_data;
           RAISE g_skip_record_exception;
         END IF;
       
@@ -1887,7 +2087,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         WHEN g_skip_record_exception THEN
           debug_message('Failed to process this record, As ' ||
                         l_error_msg);
-          x_status := g_ret_sts_warning;
+          l_procedure_status := hw_api.g_ret_sts_warning;
           insert_staging_table(p_batch_id        => g_batch_id,
                                p_me_code         => g_me_code,
                                p_le_code         => g_le_code,
@@ -1915,7 +2115,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
           l_error_msg := 'Errors in procedure cal_777. Errors:' || SQLERRM;
           debug_message('Failed to process this record, As ' || SQLERRM);
         
-          x_status := g_ret_sts_warning;
+          l_procedure_status := hw_api.g_ret_sts_warning;
           insert_staging_table(p_batch_id        => g_batch_id,
                                p_me_code         => g_me_code,
                                p_le_code         => g_le_code,
@@ -1977,13 +2177,11 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         debug_message(' cal 777 FX amount for Account: ' ||
                       l_account_777_rec.account_777);
       
-        validate_account(p_account      => l_account_777_rec.account_777,
-                         x_remeas_value => l_remeas_value,
-                         x_message      => l_error_msg,
-                         x_status       => l_status);
-        IF l_status <> g_ret_sts_success THEN
-          RAISE g_skip_record_exception;
-        END IF;
+        validate_account(p_account       => l_account_777_rec.account_777,
+                         x_remeas_value  => l_remeas_value,
+                         x_return_status => x_return_status);
+        hw_api.raise_exception(p_return_status     => x_return_status,
+                               px_procedure_status => l_procedure_status);
       
         SELECT SUM((nvl(begin_balance_dr,
                         0) - nvl(begin_balance_cr,
@@ -2052,11 +2250,9 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                   l_rate_type,
                                   g_psob_currency,
                                   g_sob_currency,
-                                  l_error_msg,
-                                  l_status);
-          IF l_status <> g_ret_sts_success THEN
-            RAISE g_skip_record_exception;
-          END IF;
+                                  x_return_status => x_return_status);
+          hw_api.raise_exception(p_return_status     => x_return_status,
+                                 px_procedure_status => l_procedure_status);
         
           SELECT SUM((nvl(begin_balance_dr,
                           0) - nvl(begin_balance_cr,
@@ -2209,7 +2405,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         WHEN g_skip_record_exception THEN
           debug_message('Failed to process this record, As ' ||
                         l_error_msg);
-          x_status := g_ret_sts_warning;
+          l_procedure_status := hw_api.g_ret_sts_warning;
           insert_staging_table(p_batch_id           => g_batch_id,
                                p_me_code            => g_me_code,
                                p_le_code            => g_le_code,
@@ -2244,7 +2440,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
           l_error_msg := 'Errors in procedure cal_777. Errors:' || SQLERRM;
           debug_message('Failed to process this record, As ' || SQLERRM);
         
-          x_status := g_ret_sts_warning;
+          l_procedure_status := hw_api.g_ret_sts_warning;
           insert_staging_table(p_batch_id        => g_batch_id,
                                p_me_code         => g_me_code,
                                p_le_code         => g_le_code,
@@ -2273,22 +2469,39 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     -- 777 FX LOOP
     END LOOP;
   
-    IF x_status = g_ret_sts_warning THEN
-      x_message := 'some records failed in procedure cal_777.';
-      debug_message(x_message);
+    IF l_procedure_status = hw_api.g_ret_sts_warning THEN
+      hw_api.stack_message('some records failed in procedure cal_777.');
     END IF;
   
+    x_return_status := hw_api.end_activity(p_pkg_name         => g_pkg_name,
+                                           p_api_name         => l_api_name,
+                                           p_commit           => p_commit,
+                                           p_procedure_status => l_procedure_status,
+                                           x_msg_count        => x_msg_count,
+                                           x_msg_data         => x_msg_data);
+  
   EXCEPTION
-    WHEN g_error THEN
-    
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure cal_777. Errors:' || x_message;
-      debug_message(x_message);
-    
+    WHEN fnd_api.g_exc_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_error,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_unexp,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     WHEN OTHERS THEN
-      x_status  := g_ret_sts_error;
-      x_message := 'Errors in procedure cal_777. Errors:' || SQLERRM;
-      debug_message(x_message);
+      x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
+                                                  p_api_name       => l_api_name,
+                                                  p_savepoint_name => l_savepoint_name,
+                                                  p_exc_name       => hw_api.g_exc_name_others,
+                                                  x_msg_count      => x_msg_count,
+                                                  x_msg_data       => x_msg_data);
     
   END;
 
@@ -2522,29 +2735,29 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     -- insert rounding ammount(DR)
     
     /*      IF abs(nvl(l_round_amount,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             0)) > 0 THEN
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    insert_staging_table(p_batch_id        => l_data_rec.batch_id,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_me_code         => l_data_rec.me_code,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_le_code         => l_data_rec.le_code,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_book_type       => l_data_rec.book_type,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_period          => l_data_rec.period,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_effective_date  => g_effective_date,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_account         => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_sob_id          => l_data_rec.sob_id,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_ccid            => g_rounding_ccid,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_currency_code   => l_data_rec.currency_code,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_entered_ytd     => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_accounted_ytd   => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_remeas_type     => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_rate_type       => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_rate            => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_accounted_dr    => l_round_amount,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_accounted_cr    => 0,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_status          => 'R',
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_msg             => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_variance_amount => NULL,
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         p_source          => 'FX');
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  END IF;*/
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     0)) > 0 THEN
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            insert_staging_table(p_batch_id        => l_data_rec.batch_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_me_code         => l_data_rec.me_code,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_le_code         => l_data_rec.le_code,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_book_type       => l_data_rec.book_type,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_period          => l_data_rec.period,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_effective_date  => g_effective_date,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_account         => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_sob_id          => l_data_rec.sob_id,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_ccid            => g_rounding_ccid,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_currency_code   => l_data_rec.currency_code,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_entered_ytd     => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_accounted_ytd   => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_remeas_type     => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_rate_type       => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_rate            => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_accounted_dr    => l_round_amount,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_accounted_cr    => 0,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_status          => 'R',
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_msg             => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_variance_amount => NULL,
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 p_source          => 'FX');
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          END IF;*/
     
     END LOOP;
   
@@ -2900,63 +3113,49 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     l_group_id  NUMBER;
     l_message   VARCHAR2(32767);
   
+    l_return_status VARCHAR2(30);
+    l_msg_data      VARCHAR2(2000);
+    l_msg_count     NUMBER;
+  
+    l_procedure_status VARCHAR2(30);
+  
   BEGIN
   
-    debug_message('--------------Parameter List---------------
-  p_batch_id:' || p_batch_id || '
-  p_me_code:' || p_me_code || '
-  p_le_code:' || p_le_code || '
-  p_book_type:' || p_book_type || '
-  p_mrc_type:' || p_mrc_type || '
-  p_period:' || p_period || '
-  p_rate_date:' || p_rate_date || '
-  p_reval_type:' || p_reval_type);
+    hw_conc_utl.log_header;
   
-    init_val_ledger(p_batch_id   => p_batch_id,
-                    p_me_code    => p_me_code,
-                    p_le_code    => p_le_code,
-                    p_book_type  => p_book_type,
-                    p_mrc_type   => p_mrc_type,
-                    p_period     => p_period,
-                    p_rate_date  => p_rate_date,
-                    p_reval_type => p_reval_type,
-                    x_message    => l_message_p,
-                    x_status     => l_status);
-    IF l_status = g_ret_sts_error THEN
-      RAISE g_error;
-    ELSIF l_status = g_ret_sts_warning THEN
-      l_message := l_message || chr(10) ||
-                   'Warning in procedure init_val_ledger. Errors:' ||
-                   l_message_p;
-      RAISE g_warning;
-    END IF;
+    init_val_ledger(p_init_msg_list => fnd_api.g_true,
+                    p_commit        => fnd_api.g_false,
+                    x_return_status => l_return_status,
+                    x_msg_count     => l_msg_count,
+                    x_msg_data      => l_msg_data,
+                    p_batch_id      => p_batch_id,
+                    p_me_code       => p_me_code,
+                    p_le_code       => p_le_code,
+                    p_book_type     => p_book_type,
+                    p_mrc_type      => p_mrc_type,
+                    p_period        => p_period,
+                    p_rate_date     => p_rate_date,
+                    p_reval_type    => p_reval_type);
+    hw_api.raise_exception(p_return_status     => l_return_status,
+                           px_procedure_status => l_procedure_status);
   
-    cal_standard(x_message => l_message_p,
-                 x_status  => l_status);
+    cal_standard(p_init_msg_list => fnd_api.g_true,
+                 p_commit        => fnd_api.g_false,
+                 x_return_status => l_return_status,
+                 x_msg_count     => l_msg_count,
+                 x_msg_data      => l_msg_data);
   
-    IF l_status = g_ret_sts_error THEN
-      RAISE g_error;
-    ELSIF l_status = g_ret_sts_warning THEN
-      --record errors and proceed
-      l_message := l_message || chr(10) ||
-                   'Warning in procedure cal_standard. Errors:' ||
-                   l_message_p;
-      debug_message(l_message);
-      retcode := 1;
-    END IF;
+    hw_api.raise_exception(p_return_status     => l_return_status,
+                           px_procedure_status => l_procedure_status);
   
-    cal_777(x_message => l_message_p,
-            x_status  => l_status);
+    cal_777(p_init_msg_list => fnd_api.g_true,
+            p_commit        => fnd_api.g_false,
+            x_return_status => l_return_status,
+            x_msg_count     => l_msg_count,
+            x_msg_data      => l_msg_data);
   
-    IF l_status = g_ret_sts_error THEN
-      RAISE g_error;
-    ELSIF l_status = g_ret_sts_warning THEN
-      --record errors and proceed
-      l_message := l_message || chr(10) ||
-                   'Warning in procedure cal_777. Errors:' || l_message_p;
-      debug_message(l_message_p);
-      retcode := 1;
-    END IF;
+    hw_api.raise_exception(p_return_status     => l_return_status,
+                           px_procedure_status => l_procedure_status);
   
     /*    cal_unrealized_gl(p_batch_id  => p_batch_id,
                       p_sob_id    => g_sob_id,
@@ -3021,28 +3220,23 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       RAISE g_warning;
     END IF;
   
+    hw_conc_utl.log_footer;
+  
   EXCEPTION
-    WHEN g_warning THEN
-    
-      l_message := l_message || chr(10) ||
-                   'Warning in procedure reval. Errors:' || l_message_p;
-      debug_message(l_message);
-      retcode := 1;
-      -- errbuf  := l_message;
-    WHEN g_error THEN
-    
-      l_message := l_message || chr(10) ||
-                   'Errors in procedure reval. Errors:' || l_message_p;
-      debug_message(l_message);
-      retcode := 2;
-      -- errbuf  := l_message;
+    WHEN fnd_api.g_exc_error THEN
+      hw_conc_utl.log_message_list;
+      retcode := '1';
+      errbuf  := l_msg_data;
+    WHEN fnd_api.g_exc_unexpected_error THEN
+      hw_conc_utl.log_message_list;
+      retcode := '2';
+      errbuf  := l_msg_data;
     WHEN OTHERS THEN
-    
-      l_message := l_message || chr(10) ||
-                   'Errors in procedure reval. Errors:' || SQLERRM;
-      debug_message(l_message);
-      retcode := 2;
-      -- errbuf  := l_message;
+      fnd_msg_pub.add_exc_msg(p_pkg_name       => g_pkg_name,
+                              p_procedure_name => 'MAIN');
+      hw_conc_utl.log_message_list;
+      retcode := '2';
+      errbuf  := SQLERRM;
   END;
 
   PROCEDURE remeasure_by_user(errbuf      OUT VARCHAR2,
@@ -3450,6 +3644,12 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
     l_idx NUMBER;
   
+    l_user_concurrent_program_name VARCHAR2(2000);
+    l_argument_text                VARCHAR2(2000);
+    l_request_date                 DATE;
+    l_actual_start_date            DATE;
+    l_actual_completion_date       DATE;
+  
     TYPE l_request_ids_t IS TABLE OF NUMBER INDEX BY BINARY_INTEGER;
     l_request_ids l_request_ids_t;
   
@@ -3552,7 +3752,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
       l_return_status := fnd_concurrent.wait_for_request(request_id => l_request_ids(l_idx),
                                                          INTERVAL   => 1,
-                                                         max_wait   => 0,
+                                                         max_wait   => 60 * 30,
                                                          phase      => l_phase,
                                                          status     => l_status,
                                                          dev_phase  => l_dev_phase,
@@ -3561,8 +3761,34 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
       IF l_return_status = TRUE THEN
       
-        debug_message('Request:' || l_request_ids(l_idx) || '|' || l_phase || '|' ||
-                      l_status || '|' || l_msg_data);
+        SELECT user_concurrent_program_name,
+               argument_text,
+               request_date,
+               actual_start_date,
+               actual_completion_date
+          INTO l_user_concurrent_program_name,
+               l_argument_text,
+               l_request_date,
+               l_actual_start_date,
+               l_actual_completion_date
+          FROM fnd_conc_req_summary_v
+         WHERE requested_by = l_request_ids(l_idx);
+      
+        debug_message('Request:' || l_request_ids(l_idx) || '|' ||
+                      l_user_concurrent_program_name || '(' ||
+                      l_argument_text || ')|' || l_phase || '|' ||
+                      l_status || '|' || l_msg_data || '| reqeust date:' ||
+                      to_char(l_request_date,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      '|actual start date:' ||
+                      to_char(l_actual_start_date,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      '|actual completion date:' ||
+                      to_char(l_actual_completion_date,
+                              'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                      'Elapsed Time:' ||
+                      round((l_actual_completion_date -
+                            l_actual_start_date) * 1440 * 60));
       
         IF l_phase != 'Completed'
            OR l_status IN ('Cancelled',
@@ -3644,6 +3870,12 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     l_msg_data      VARCHAR2(2000);
   
     l_idx NUMBER;
+  
+    l_user_concurrent_program_name VARCHAR2(2000);
+    l_argument_text                VARCHAR2(2000);
+    l_request_date                 DATE;
+    l_actual_start_date            DATE;
+    l_actual_completion_date       DATE;
   
     TYPE l_request_ids_t IS TABLE OF NUMBER INDEX BY BINARY_INTEGER;
     l_request_ids l_request_ids_t;
@@ -3750,8 +3982,34 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     
       IF l_return_status = TRUE THEN
       
-        debug_message('Request:' || l_request_ids(l_idx) || '|' || l_phase || '|' ||
-                      l_status || '|' || l_msg_data);
+        SELECT user_concurrent_program_name,
+               argument_text,
+               request_date,
+               actual_start_date,
+               actual_completion_date
+          INTO l_user_concurrent_program_name,
+               l_argument_text,
+               l_request_date,
+               l_actual_start_date,
+               l_actual_completion_date
+          FROM fnd_conc_req_summary_v
+         WHERE requested_by = l_request_ids(l_idx);
+      
+        debug_message('Request:' || l_request_ids(l_idx) || '|' ||
+                      l_user_concurrent_program_name || '(' ||
+                      l_argument_text || ')|' || l_phase || '|' ||
+                      l_status || '|' || l_msg_data || '| reqeust date:' ||
+                      to_char(l_request_date,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      '|actual start date:' ||
+                      to_char(l_actual_start_date,
+                              'DD-MON-YYYY HH24:MI:SS') ||
+                      '|actual completion date:' ||
+                      to_char(l_actual_completion_date,
+                              'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                      'Elapsed Time:' ||
+                      round((l_actual_completion_date -
+                            l_actual_start_date) * 1440 * 60));
       
         IF l_phase != 'Completed'
            OR l_status IN ('Cancelled',
