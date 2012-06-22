@@ -120,15 +120,15 @@ INSERT INTO gl.gl_daily_rates
 
 UPDATE xxrfp_shelton_bus_map t
    SET t.fx_enable_flag = 'Y',
-       t.cta_account = nvl(t.cta_account,
-                           '4840510110000'),
-       t.fx_account   = nvl(t.fx_account,
-                            '7400010026701'),
-       t.fx_cc        = 'GX9999',
-       t.fx_reference = nvl(t.fx_reference,
-                            '000000'),
-       t.fx_project   = nvl(t.fx_project,
-                            '0000000000')
+       t.cta_account    = nvl(t.cta_account,
+                              '4840510110000'),
+       t.fx_account     = nvl(t.fx_account,
+                              '7400010026701'),
+       t.fx_cc          = 'GX9999',
+       t.fx_reference   = nvl(t.fx_reference,
+                              '000000'),
+       t.fx_project     = nvl(t.fx_project,
+                              '0000000000')
 
  WHERE t.le_code != '000000'
    AND t.book_type = 'P';
@@ -137,3 +137,26 @@ UPDATE gl.gl_period_statuses t
    SET t.closing_status = 'O'
  WHERE t.application_id = 101
    AND t.period_name = 'JAN-12';
+
+SELECT a.request_id,
+       a.user_concurrent_program_name,
+       a.argument_text,
+       a.completion_text,
+       (a.actual_completion_date - a.actual_start_date) * 1440 * 60 senconds,
+       a.request_id,
+       a.requestor,
+       a.requested_start_date,
+       a.actual_start_date,
+       a.actual_completion_date
+  FROM fnd_conc_requests_form_v a
+ WHERE a.user_concurrent_program_name IN
+       ('GERFP Revalue By Ledger',
+        'GERFP Remeasurement By User',
+        'GERFP Translation By User')
+   AND a.actual_completion_date > SYSDATE - 10
+   AND a.requestor != 'HOWLET'
+   AND a.request_id NOT IN (12619540,
+                            '12616534',
+                            '12619542',
+                            '12616535')
+

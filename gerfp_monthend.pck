@@ -42,6 +42,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
   -- Enter procedure, function bodies as shown below
 
   v_conc_request NUMBER := fnd_global.conc_request_id;
+  g_step_no      NUMBER;
 
   PROCEDURE wait_for_requests(p_req_id IN VARCHAR2) IS
   
@@ -53,8 +54,9 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     v_dev_phase        VARCHAR2(20);
     v_dev_status       VARCHAR2(20);
     v_message          VARCHAR2(200);
+    v_new_req_flag     VARCHAR2(20);
   
-    v_last_req NUMBER;
+    v_first_req NUMBER;
   
     l_actual_start_date DATE;
   
@@ -74,7 +76,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
        WHERE
       --nvl(PHASE_CODE,'N')<>'C' and 
        requested_by = p_user_id
-       AND request_id > pc_req_id
+       AND request_id > = pc_req_id
        ORDER BY request_id;
   
   BEGIN
@@ -85,23 +87,24 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     v_req_id := p_req_id;
     apps.fnd_profile.get('USER_ID',
                          v_user_id);
+    v_new_req_flag := 'Y';
   
     LOOP
     
-      v_last_req := v_req_id;
-    
-      IF nvl(v_last_req,
-             0) = 0 THEN
-        EXIT;
+      IF v_new_req_flag = 'N' THEN
+        RETURN;
       END IF;
     
-      dbms_lock.sleep(60);
+      v_first_req := v_req_id;
     
-      v_req_id := NULL;
+      v_new_req_flag := 'N';
     
       FOR v_request IN c_queue(v_user_id,
-                               v_last_req)
+                               v_first_req)
       LOOP
+      
+        --new requests exist
+        v_new_req_flag := 'Y';
       
         v_req_id := v_request.request_id;
       
@@ -127,7 +130,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
             INTO l_actual_start_date,
                  l_actual_completion_date
             FROM fnd_conc_req_summary_v
-           WHERE requested_by = v_req_id;
+           WHERE request_id = v_req_id;
         
           fnd_file.put_line(fnd_file.log,
                             'Request:' || v_req_id || '|' ||
@@ -151,11 +154,17 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
         
           fnd_file.put_line(fnd_file.log,
                             'WAIT FOR REQUEST:' || v_req_id ||
-                            ' FAILED - STATUS UNKNOWN');
+                            ' FAILED - STATUS UNKNOWN. So Stop the program queue');
+          RAISE fnd_api.g_exc_unexpected_error;
         
         END IF;
       
       END LOOP;
+    
+      -- first unfinished request
+      v_req_id := nvl(v_req_id,
+                      0) + 1;
+    
     END LOOP;
   
     fnd_file.put_line(fnd_file.log,
@@ -171,9 +180,11 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     v_start_time NUMBER;
   
   BEGIN
+    g_step_no := nvl(g_step_no,
+                     0) + 1;
     --P book Post
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') ||
                       ': Remeasurement begin.MRC Type:' || p_mrc_type ||
@@ -207,7 +218,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     END IF;
   
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') ||
                       ': Remeasurement end.MRC Type:' || p_mrc_type ||
@@ -223,9 +234,11 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     x_status     VARCHAR2(20);
     v_start_time NUMBER;
   BEGIN
+    g_step_no := nvl(g_step_no,
+                     0) + 1;
     --P book Post
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') ||
                       ': Translation begin.-----------------------');
@@ -256,7 +269,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     END IF;
   
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') ||
                       ': Translation end. Elapsed Time:' ||
@@ -274,9 +287,11 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     v_start_time NUMBER;
   
   BEGIN
+    g_step_no := nvl(g_step_no,
+                     0) + 1;
     --P book Post
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') ||
                       ': USTAX begin.-----------------------');
@@ -306,7 +321,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     END IF;
   
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') ||
                       ': USTAX end. Elapsed Time:' ||
@@ -319,9 +334,11 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     v_req_id     NUMBER;
     v_start_time NUMBER;
   BEGIN
+    g_step_no := nvl(g_step_no,
+                     0) + 1;
     --P book Post
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') || ': ' ||
                       p_mrc_type ||
@@ -351,7 +368,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
     END IF;
   
     fnd_file.put_line(fnd_file.log,
-                      '-----------------------' ||
+                      '-----------------------Step ' || g_step_no || ':' ||
                       to_char(SYSDATE,
                               'DD-MON-YYYY HH24:MI:SS') || ': ' ||
                       p_mrc_type || ' Book Post end. Elapsed Time:' ||
