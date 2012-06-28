@@ -123,39 +123,34 @@ CREATE OR REPLACE PACKAGE BODY gerfp_monthend
                                                                    v_dev_status,
                                                                    v_message);
       
-        IF v_request_complete = TRUE THEN
-        
-          SELECT actual_start_date,
-                 actual_completion_date
-            INTO l_actual_start_date,
-                 l_actual_completion_date
-            FROM fnd_conc_req_summary_v
-           WHERE request_id = v_req_id;
-        
-          fnd_file.put_line(fnd_file.log,
-                            'Request:' || v_req_id || '|' ||
-                            v_request.user_concurrent_program_name || '(' ||
-                            v_request.argument_text || ')|' || v_phase || '|' ||
-                            v_status || '|' || v_message ||
-                            '| reqeust date:' ||
-                            to_char(v_request.request_date,
-                                    'DD-MON-YYYY HH24:MI:SS') ||
-                            '|actual start date:' ||
-                            to_char(l_actual_start_date,
-                                    'DD-MON-YYYY HH24:MI:SS') ||
-                            '|actual completion date:' ||
-                            to_char(l_actual_completion_date,
-                                    'DD-MON-YYYY HH24:MI:SS') || '|' ||
-                            'Elapsed Time:' ||
-                            round((l_actual_completion_date -
-                                  l_actual_start_date) * 1440 * 60));
-        
-        ELSE
+        SELECT actual_start_date,
+               actual_completion_date
+          INTO l_actual_start_date,
+               l_actual_completion_date
+          FROM fnd_conc_req_summary_v
+         WHERE request_id = v_req_id;
+      
+        fnd_file.put_line(fnd_file.log,
+                          'Request:' || v_req_id || '|' ||
+                          v_request.user_concurrent_program_name || '(' ||
+                          v_request.argument_text || ')|' || v_phase || '|' ||
+                          v_status || '|' || v_message || '| reqeust date:' ||
+                          to_char(v_request.request_date,
+                                  'DD-MON-YYYY HH24:MI:SS') ||
+                          '|actual start date:' ||
+                          to_char(l_actual_start_date,
+                                  'DD-MON-YYYY HH24:MI:SS') ||
+                          '|actual completion date:' ||
+                          to_char(l_actual_completion_date,
+                                  'DD-MON-YYYY HH24:MI:SS') || '|' ||
+                          'Elapsed Time:' ||
+                          round((l_actual_completion_date -
+                                l_actual_start_date) * 1440 * 60));
+      
+        IF v_request_complete != TRUE THEN
         
           fnd_file.put_line(fnd_file.log,
-                            'WAIT FOR REQUEST:' || v_req_id ||
-                            ' FAILED - STATUS UNKNOWN. So Stop the program queue');
-          RAISE fnd_api.g_exc_unexpected_error;
+                            'Warning:Above Request''s completion status may not be right, please double check.');
         
         END IF;
       

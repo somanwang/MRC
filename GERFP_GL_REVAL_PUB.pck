@@ -665,7 +665,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     BEGIN
       SELECT t.me_mars_line_of_business
         INTO g_me_line_of_business
-        FROM gerfp_msas.vld_ccl_me_lov t
+        FROM xxrfp.gerfp_vld_ccl_me_lov t
        WHERE t.ccl_me_id = p_me_code;
     
       debug_message('line of business of ME:' || g_me_line_of_business);
@@ -906,7 +906,6 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         debug_message('Errors in Getting Rate: ' ||
                       fnd_msg_pub.get(fnd_msg_pub.g_last,
                                       'F'));
-        fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
         RAISE fnd_api.g_exc_unexpected_error;
       END IF;
     
@@ -960,6 +959,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_error,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+    
     WHEN fnd_api.g_exc_unexpected_error THEN
       x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
                                                   p_api_name       => l_api_name,
@@ -967,6 +967,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_unexp,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+    
     WHEN OTHERS THEN
       x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
                                                   p_api_name       => l_api_name,
@@ -974,6 +975,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_others,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+    
   END;
 
   PROCEDURE cal_translate(p_init_msg_list IN VARCHAR2 DEFAULT fnd_api.g_false,
@@ -988,49 +990,53 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     l_savepoint_name CONSTANT VARCHAR2(30) := 'cal_translate';
     l_procedure_status VARCHAR2(30);
     CURSOR l_data_crs IS
-      SELECT gcc.code_combination_id,
-             sob2.currency_code psob_curr,
-             gcc.segment4 account,
-             ((nvl(gb.begin_balance_dr,
-                   0) - nvl(gb.begin_balance_cr,
-                              0)) +
-             (nvl(gb.period_net_dr,
-                   0) - nvl(gb.period_net_cr,
-                              0))) r_accounted_ytd,
-             ((nvl(gb2.begin_balance_dr,
-                   0) - nvl(gb2.begin_balance_cr,
-                              0)) +
-             (nvl(gb2.period_net_dr,
-                   0) - nvl(gb2.period_net_cr,
-                              0))) p_accounted_ytd
-        FROM gl_balances          gb,
-             gl_code_combinations gcc,
-             gl_sets_of_books     sob,
-             gl_sets_of_books     sob2,
-             gl_balances          gb2
-       WHERE gcc.code_combination_id = p_ccid
-         AND gb.code_combination_id = gcc.code_combination_id
-         AND gb.currency_code = sob.currency_code
-         AND gb.set_of_books_id = sob.set_of_books_id
-         AND sob.set_of_books_id = g_sob_id
-         AND gb.period_name = g_period
-         AND gb2.code_combination_id = gcc.code_combination_id
-         AND gb2.currency_code = sob2.currency_code
-         AND gb2.set_of_books_id = sob2.set_of_books_id
-         AND sob2.set_of_books_id = g_psob_id
-         AND gb2.period_name = g_period
-         AND (((nvl(gb.begin_balance_dr,
-                    0) - nvl(gb.begin_balance_cr,
-                                0)) +
-             (nvl(gb.period_net_dr,
-                    0) - nvl(gb.period_net_cr,
-                                0))) <> 0 OR
-             ((nvl(gb2.begin_balance_dr,
-                    0) - nvl(gb2.begin_balance_cr,
-                                0)) +
-             (nvl(gb2.period_net_dr,
-                    0) - nvl(gb2.period_net_cr,
-                                0))) <> 0);
+      SELECT base_view.code_combination_id,
+             g_psob_currency psob_curr,
+             base_view.account,
+             SUM(base_view.p_accounted_ytd) p_accounted_ytd,
+             SUM(base_view.r_accounted_ytd) r_accounted_ytd
+        FROM (SELECT gcc.code_combination_id,
+                     gcc.segment4 account,
+                     0 p_accounted_ytd,
+                     ((nvl(gb.begin_balance_dr,
+                           0) - nvl(gb.begin_balance_cr,
+                                      0)) +
+                     (nvl(gb.period_net_dr,
+                           0) - nvl(gb.period_net_cr,
+                                      0))) r_accounted_ytd
+                FROM gl_balances          gb,
+                     gl_code_combinations gcc,
+                     gl_sets_of_books     sob
+               WHERE gcc.code_combination_id = p_ccid
+                 AND gb.code_combination_id = gcc.code_combination_id
+                 AND gb.currency_code = sob.currency_code
+                 AND gb.set_of_books_id = sob.set_of_books_id
+                 AND sob.set_of_books_id = g_sob_id
+                 AND gb.period_name = g_period
+              
+              UNION ALL
+              
+              SELECT gcc.code_combination_id,
+                     gcc.segment4 account,
+                     ((nvl(gb2.begin_balance_dr,
+                           0) - nvl(gb2.begin_balance_cr,
+                                      0)) +
+                     (nvl(gb2.period_net_dr,
+                           0) - nvl(gb2.period_net_cr,
+                                      0))) p_accounted_ytd,
+                     0 r_accounted_ytd
+                FROM gl_code_combinations gcc,
+                     gl_sets_of_books     sob2,
+                     gl_balances          gb2
+               WHERE gcc.code_combination_id = p_ccid
+                 AND gb2.code_combination_id = gcc.code_combination_id
+                 AND gb2.currency_code = sob2.currency_code
+                 AND gb2.set_of_books_id = sob2.set_of_books_id
+                 AND sob2.set_of_books_id = g_psob_id
+                 AND gb2.period_name = g_period) base_view
+       GROUP BY base_view.code_combination_id,
+                base_view.account
+      HAVING nvl(SUM(base_view.p_accounted_ytd), 0) != 0 OR nvl(SUM(base_view.r_accounted_ytd), 0) != 0;
   
     l_variance_amount NUMBER;
     l_reval_amount    NUMBER;
@@ -1072,7 +1078,6 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
         debug_message('Errors in Getting Rate: ' ||
                       fnd_msg_pub.get(fnd_msg_pub.g_last,
                                       'F'));
-        fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
         RAISE fnd_api.g_exc_unexpected_error;
       END IF;
     
@@ -1124,6 +1129,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_error,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+    
     WHEN fnd_api.g_exc_unexpected_error THEN
       x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
                                                   p_api_name       => l_api_name,
@@ -1131,6 +1137,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_unexp,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+    
     WHEN OTHERS THEN
       x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
                                                   p_api_name       => l_api_name,
@@ -1138,6 +1145,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_others,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+    
   END;
 
   PROCEDURE validate_account(p_account       IN VARCHAR2,
@@ -1190,13 +1198,13 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
-    IF NOT (l_line_of_business = 'ALL' OR
+    /*    IF NOT (l_line_of_business = 'ALL' OR
         g_me_line_of_business = l_line_of_business) THEN
     
       hw_api.stack_message('line_of_business is conflict on account level and ME level');
       RAISE fnd_api.g_exc_unexpected_error;
     
-    END IF;
+    END IF;*/
   
     IF NOT ((l_line_of_business IN ('ALL',
                                     'I') AND
@@ -1294,7 +1302,6 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       debug_message('Errors in Validating Account: ' ||
                     fnd_msg_pub.get(fnd_msg_pub.g_last,
                                     'F'));
-      fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
       RAISE fnd_api.g_exc_unexpected_error;
     END IF;
   
@@ -1484,6 +1491,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_error,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+      fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
     WHEN fnd_api.g_exc_unexpected_error THEN
       x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
                                                   p_api_name       => l_api_name,
@@ -1491,6 +1499,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_unexp,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+      fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
     WHEN OTHERS THEN
       x_return_status := hw_api.handle_exceptions(p_pkg_name       => g_pkg_name,
                                                   p_api_name       => l_api_name,
@@ -1498,6 +1507,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                                   p_exc_name       => hw_api.g_exc_name_others,
                                                   x_msg_count      => x_msg_count,
                                                   x_msg_data       => x_msg_data);
+      fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
     
   END;
 
@@ -1568,42 +1578,64 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     ELSIF g_reval_type = c_source_translate THEN
     
       OPEN l_data_crs FOR
-        SELECT DISTINCT gcc.code_combination_id,
-                        gcc.segment4 account,
-                        gcc.controlled_account_type
-          FROM gerfp_rev_gcc_v  gcc,
-               gl_balances      gb,
-               gl_sets_of_books sob,
-               gl_sets_of_books sob2,
-               gl_balances      gb2
-         WHERE gcc.segment1 = g_me_code
-           AND gcc.segment2 = g_le_code
-           AND gcc.segment3 = g_book_type
-           AND gb.code_combination_id = gcc.code_combination_id
-           AND gb.currency_code = sob.currency_code
-           AND gb.set_of_books_id = sob.set_of_books_id
-           AND sob.set_of_books_id = g_sob_id
-           AND gb.period_name = g_period
-           AND gb2.code_combination_id = gcc.code_combination_id
-           AND gb2.currency_code = sob2.currency_code
-           AND gb2.set_of_books_id = sob2.set_of_books_id
-           AND sob2.set_of_books_id = g_psob_id
-           AND gb2.period_name = g_period
-           AND (((nvl(gb.begin_balance_dr,
-                      0) - nvl(gb.begin_balance_cr,
-                                  0)) +
-               (nvl(gb.period_net_dr,
-                      0) - nvl(gb.period_net_cr,
-                                  0))) <> 0 OR
-               ((nvl(gb2.begin_balance_dr,
-                      0) - nvl(gb2.begin_balance_cr,
-                                  0)) +
-               (nvl(gb2.period_net_dr,
-                      0) - nvl(gb2.period_net_cr,
-                                  0))) <> 0)
-           AND gcc.remeas_value IN ('1',
-                                    'A',
-                                    'C');
+        SELECT base_view.code_combination_id,
+               base_view.account,
+               base_view.controlled_account_type
+          FROM (SELECT gcc.code_combination_id,
+                       gcc.segment4 account,
+                       gcc.controlled_account_type,
+                       0 p_accounted_ytd,
+                       ((nvl(gb.begin_balance_dr,
+                             0) - nvl(gb.begin_balance_cr,
+                                        0)) +
+                       (nvl(gb.period_net_dr,
+                             0) - nvl(gb.period_net_cr,
+                                        0))) r_accounted_ytd
+                  FROM gerfp_rev_gcc_v  gcc,
+                       gl_balances      gb,
+                       gl_sets_of_books sob
+                 WHERE gcc.segment1 = g_me_code
+                   AND gcc.segment2 = g_le_code
+                   AND gcc.segment3 = g_book_type
+                   AND gb.code_combination_id = gcc.code_combination_id
+                   AND gb.currency_code = sob.currency_code
+                   AND gb.set_of_books_id = sob.set_of_books_id
+                   AND sob.set_of_books_id = g_sob_id
+                   AND gb.period_name = g_period
+                   AND gcc.remeas_value IN ('1',
+                                            'A',
+                                            'C')
+                
+                UNION ALL
+                
+                SELECT gcc.code_combination_id,
+                       gcc.segment4 account,
+                       gcc.controlled_account_type,
+                       ((nvl(gb2.begin_balance_dr,
+                             0) - nvl(gb2.begin_balance_cr,
+                                        0)) +
+                       (nvl(gb2.period_net_dr,
+                             0) - nvl(gb2.period_net_cr,
+                                        0))) p_accounted_ytd,
+                       0 r_accounted_ytd
+                  FROM gerfp_rev_gcc_v  gcc,
+                       gl_sets_of_books sob2,
+                       gl_balances      gb2
+                 WHERE gcc.segment1 = g_me_code
+                   AND gcc.segment2 = g_le_code
+                   AND gcc.segment3 = g_book_type
+                   AND gb2.code_combination_id = gcc.code_combination_id
+                   AND gb2.currency_code = sob2.currency_code
+                   AND gb2.set_of_books_id = sob2.set_of_books_id
+                   AND sob2.set_of_books_id = g_psob_id
+                   AND gb2.period_name = g_period
+                   AND gcc.remeas_value IN ('1',
+                                            'A',
+                                            'C')) base_view
+         GROUP BY base_view.code_combination_id,
+                  base_view.account,
+                  base_view.controlled_account_type
+        HAVING nvl(SUM(base_view.p_accounted_ytd), 0) != 0 OR nvl(SUM(base_view.r_accounted_ytd), 0) != 0;
     
     END IF;
   
@@ -1886,7 +1918,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                      0) - nvl(period_net_cr_beq,
                                 0)) <> 0)
            AND gcc.remeas_value IN ('E')
-           AND NOT (gcc.segment5 = ('XP8888') AND
+           AND NOT (gcc.segment5 = ('GX9999') AND
                 gcc.segment6 = c_defaut_segment6 AND
                 gcc.segment7 = c_defaut_segment7 AND
                 gcc.segment8 = c_defaut_segment8 AND
@@ -1897,60 +1929,116 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
     ELSIF g_reval_type = c_source_translate THEN
     
       OPEN l_data_crs FOR
-        SELECT DISTINCT gcc.code_combination_id,
-                        gcc.segment4 account,
-                        gcc.ccl_account,
-                        gcc.remeas_value,
-                        gcc.translate_account account_777,
-                        (SELECT t.account_to_roll_to
-                           FROM vld_ccl_accounts_lov t
-                          WHERE t.ccl_account = gcc.translate_account) account_776,
-                        gcc.controlled_account_type,
-                        (SELECT controlled_account_type
-                           FROM vld_ccl_accounts_lov t
-                          WHERE t.ccl_account = gcc.translate_account) controlled_account_type_777
-          FROM gerfp_rev_gcc_v  gcc,
-               gl_balances      gb,
-               gl_sets_of_books sob,
-               gl_sets_of_books sob2,
-               gl_balances      gb2
-         WHERE gcc.segment1 = g_me_code
-           AND gcc.segment2 = g_le_code
-           AND gcc.segment3 = g_book_type
-           AND gb.code_combination_id = gcc.code_combination_id
-           AND gb.currency_code = sob.currency_code
-           AND gb.set_of_books_id = sob.set_of_books_id
-           AND sob.set_of_books_id = g_sob_id
-           AND gb.period_name = g_period
-           AND gb2.code_combination_id = gcc.code_combination_id
-           AND gb2.currency_code = sob2.currency_code
-           AND gb2.set_of_books_id = sob2.set_of_books_id
-           AND sob2.set_of_books_id = g_psob_id
-           AND gb2.period_name = g_period
-           AND (((nvl(gb.begin_balance_dr,
-                      0) - nvl(gb.begin_balance_cr,
-                                  0)) +
-               (nvl(gb.period_net_dr,
-                      0) - nvl(gb.period_net_cr,
-                                  0))) <> 0 OR
-               ((nvl(gb2.begin_balance_dr,
-                      0) - nvl(gb2.begin_balance_cr,
-                                  0)) +
-               (nvl(gb2.period_net_dr,
-                      0) - nvl(gb2.period_net_cr,
-                                  0))) <> 0)
-           AND gcc.remeas_value IN ('E',
-                                    'F',
-                                    'I',
-                                    '3',
-                                    '7')
-           AND NOT (gcc.segment5 = ('XP8888') AND
-                gcc.segment6 = c_defaut_segment6 AND
-                gcc.segment7 = c_defaut_segment7 AND
-                gcc.segment8 = c_defaut_segment8 AND
-                gcc.segment9 = c_defaut_segment9 AND
-                gcc.segment10 = c_defaut_segment10 AND
-                gcc.segment11 = c_defaut_segment11);
+        SELECT base_view.code_combination_id,
+               base_view.account,
+               base_view.ccl_account,
+               base_view.remeas_value,
+               base_view.account_777,
+               base_view.account_776,
+               base_view.controlled_account_type,
+               base_view.controlled_account_type_777
+          FROM (SELECT gcc.code_combination_id,
+                       gcc.segment4 account,
+                       gcc.ccl_account,
+                       gcc.remeas_value,
+                       gcc.translate_account account_777,
+                       (SELECT t.account_to_roll_to
+                          FROM vld_ccl_accounts_lov t
+                         WHERE t.ccl_account = gcc.translate_account) account_776,
+                       
+                       gcc.controlled_account_type,
+                       
+                       (SELECT controlled_account_type
+                          FROM vld_ccl_accounts_lov t
+                         WHERE t.ccl_account = gcc.translate_account) controlled_account_type_777,
+                       0 p_accounted_ytd,
+                       
+                       ((nvl(gb.begin_balance_dr,
+                             0) - nvl(gb.begin_balance_cr,
+                                        0)) +
+                       (nvl(gb.period_net_dr,
+                             0) - nvl(gb.period_net_cr,
+                                        0))) r_accounted_ytd
+                  FROM gerfp_rev_gcc_v  gcc,
+                       gl_balances      gb,
+                       gl_sets_of_books sob
+                 WHERE gcc.segment1 = g_me_code
+                   AND gcc.segment2 = g_le_code
+                   AND gcc.segment3 = g_book_type
+                   AND gb.code_combination_id = gcc.code_combination_id
+                   AND gb.currency_code = sob.currency_code
+                   AND gb.set_of_books_id = sob.set_of_books_id
+                   AND sob.set_of_books_id = g_sob_id
+                   AND gb.period_name = g_period
+                   AND gcc.remeas_value IN ('E',
+                                            'F',
+                                            'I',
+                                            '3',
+                                            '7')
+                   AND NOT (gcc.segment5 = ('GX9999') AND
+                        gcc.segment6 = c_defaut_segment6 AND
+                        gcc.segment7 = c_defaut_segment7 AND
+                        gcc.segment8 = c_defaut_segment8 AND
+                        gcc.segment9 = c_defaut_segment9 AND
+                        gcc.segment10 = c_defaut_segment10 AND
+                        gcc.segment11 = c_defaut_segment11)
+                
+                UNION ALL
+                
+                SELECT gcc.code_combination_id,
+                       gcc.segment4 account,
+                       gcc.ccl_account,
+                       gcc.remeas_value,
+                       gcc.translate_account account_777,
+                       (SELECT t.account_to_roll_to
+                          FROM vld_ccl_accounts_lov t
+                         WHERE t.ccl_account = gcc.translate_account) account_776,
+                       
+                       gcc.controlled_account_type,
+                       
+                       (SELECT controlled_account_type
+                          FROM vld_ccl_accounts_lov t
+                         WHERE t.ccl_account = gcc.translate_account) controlled_account_type_777,
+                       ((nvl(gb2.begin_balance_dr,
+                             0) - nvl(gb2.begin_balance_cr,
+                                        0)) +
+                       (nvl(gb2.period_net_dr,
+                             0) - nvl(gb2.period_net_cr,
+                                        0))) p_accounted_ytd,
+                       
+                       0 r_accounted_ytd
+                  FROM gerfp_rev_gcc_v  gcc,
+                       gl_sets_of_books sob2,
+                       gl_balances      gb2
+                 WHERE gcc.segment1 = g_me_code
+                   AND gcc.segment2 = g_le_code
+                   AND gcc.segment3 = g_book_type
+                   AND gb2.code_combination_id = gcc.code_combination_id
+                   AND gb2.currency_code = sob2.currency_code
+                   AND gb2.set_of_books_id = sob2.set_of_books_id
+                   AND sob2.set_of_books_id = g_psob_id
+                   AND gb2.period_name = g_period
+                   AND gcc.remeas_value IN ('E',
+                                            'F',
+                                            'I',
+                                            '3',
+                                            '7')
+                   AND NOT (gcc.segment5 = ('GX9999') AND
+                        gcc.segment6 = c_defaut_segment6 AND
+                        gcc.segment7 = c_defaut_segment7 AND
+                        gcc.segment8 = c_defaut_segment8 AND
+                        gcc.segment9 = c_defaut_segment9 AND
+                        gcc.segment10 = c_defaut_segment10 AND
+                        gcc.segment11 = c_defaut_segment11)) base_view
+         GROUP BY base_view.code_combination_id,
+                  base_view.account,
+                  base_view.ccl_account,
+                  base_view.remeas_value,
+                  base_view.account_777,
+                  base_view.account_776,
+                  base_view.controlled_account_type,
+                  base_view.controlled_account_type_777
+        HAVING nvl(SUM(base_view.p_accounted_ytd), 0) != 0 OR nvl(SUM(base_view.r_accounted_ytd), 0) != 0;
     
     END IF;
   
@@ -2189,11 +2277,12 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                          x_remeas_value  => l_remeas_value,
                          x_return_status => x_return_status);
         IF x_return_status <> fnd_api.g_ret_sts_success THEN
-          debug_message('Errors in Validating Account: ' ||
-                        fnd_msg_pub.get(fnd_msg_pub.g_last,
-                                        'F'));
+        
+          l_error_msg := fnd_msg_pub.get(fnd_msg_pub.g_last,
+                                         'F');
           fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
-          RAISE fnd_api.g_exc_unexpected_error;
+          RAISE g_skip_record_exception;
+        
         END IF;
       
         SELECT SUM((nvl(begin_balance_dr,
@@ -2213,7 +2302,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
            AND gcc.segment2 = g_le_code
            AND gcc.segment3 = g_book_type
            AND gcc.segment4 = l_account_777_rec.account_777
-           AND (gcc.segment5 = 'XP8888' OR
+           AND (gcc.segment5 = 'GX9999' OR
                (l_account_777_rec.remeas_type IN
                ('E',
                   'F',
@@ -2243,7 +2332,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
              AND gcc.segment2 = g_le_code
              AND gcc.segment3 = g_book_type
              AND gcc.segment4 = l_account_777_rec.account_776
-             AND (gcc.segment5 = 'XP8888' OR
+             AND (gcc.segment5 = 'GX9999' OR
                  (l_account_777_rec.remeas_type IN
                  ('E',
                     'F',
@@ -2265,11 +2354,10 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                                   g_sob_currency);
           IF nvl(l_rate,
                  0) = 0 THEN
-            debug_message('Errors in Getting Rate: ' ||
-                          fnd_msg_pub.get(fnd_msg_pub.g_last,
-                                          'F'));
+            l_error_msg := fnd_msg_pub.get(fnd_msg_pub.g_last,
+                                           'F');
             fnd_msg_pub.delete_msg(fnd_msg_pub.count_msg);
-            RAISE fnd_api.g_exc_unexpected_error;
+            RAISE g_skip_record_exception;
           END IF;
         
           SELECT SUM((nvl(begin_balance_dr,
@@ -2289,7 +2377,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
              AND gcc.segment2 = g_le_code
              AND gcc.segment3 = g_book_type
              AND gcc.segment4 = l_account_777_rec.account_777
-             AND (gcc.segment5 = 'XP8888' OR
+             AND (gcc.segment5 = 'GX9999' OR
                  (l_account_777_rec.remeas_type IN
                  ('E',
                     'F',
@@ -2319,7 +2407,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                AND gcc.segment2 = g_le_code
                AND gcc.segment3 = g_book_type
                AND gcc.segment4 = l_account_777_rec.account_776
-               AND (gcc.segment5 = 'XP8888' OR
+               AND (gcc.segment5 = 'GX9999' OR
                    (l_account_777_rec.remeas_type IN
                    ('E',
                       'F',
@@ -2370,7 +2458,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
           l_777_concat_segments := g_me_code || '.' || g_le_code || '.' ||
                                    g_book_type || '.' ||
                                    l_account_777_rec.account_777 || '.' ||
-                                   'XP8888' || '.' || c_defaut_segment6 || '.' ||
+                                   'GX9999' || '.' || c_defaut_segment6 || '.' ||
                                    c_defaut_segment7 || '.' ||
                                    c_defaut_segment8 || '.' ||
                                    c_defaut_segment9 || '.0.0';
@@ -3152,8 +3240,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       hw_conc_utl.out_message_list;
       retcode := '2';
       errbuf  := SQLERRM;
-      hw_log.debug('error_stack:' || fnd_global.newline ||
-                   dbms_utility.format_error_stack);
+      hw_log.debug('Error Stack:' || fnd_global.newline ||
+                   dbms_utility.format_error_backtrace);
   END;
 
   PROCEDURE remeasure_by_user(errbuf      OUT VARCHAR2,
@@ -3208,7 +3296,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
     debug_message('mrc_type:' || l_mrc_type);
   
-    IF l_mrc_type = 'N' THEN
+    IF l_mrc_type IN ('N',
+                      'P') THEN
       l_p_sod_id := p_sob_id;
       l_mrc_type := 'P';
     ELSE
@@ -3216,10 +3305,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       SELECT ba.primary_set_of_books_id
         INTO l_p_sod_id
         FROM gl_mc_book_assignments ba
-       WHERE decode(l_mrc_type,
-                    'P',
-                    ba.primary_set_of_books_id,
-                    ba.reporting_set_of_books_id) = p_sob_id;
+       WHERE ba.reporting_set_of_books_id = p_sob_id;
     END IF;
   
     debug_message('primary sod_id:' || l_p_sod_id);
@@ -3345,8 +3431,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       hw_conc_utl.out_message_list;
       retcode := '2';
       errbuf  := SQLERRM;
-      hw_log.debug('error_stack:' || fnd_global.newline ||
-                   dbms_utility.format_error_stack);
+      hw_log.debug('Error Stack:' || fnd_global.newline ||
+                   dbms_utility.format_error_backtrace);
   END;
 
   PROCEDURE translate_by_user(errbuf      OUT VARCHAR2,
@@ -3401,7 +3487,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
   
     debug_message('mrc_type:' || l_mrc_type);
   
-    IF l_mrc_type = 'N' THEN
+    IF l_mrc_type IN ('N',
+                      'P') THEN
       l_p_sod_id := p_sob_id;
       l_mrc_type := 'P';
     ELSE
@@ -3409,10 +3496,7 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       SELECT ba.primary_set_of_books_id
         INTO l_p_sod_id
         FROM gl_mc_book_assignments ba
-       WHERE decode(l_mrc_type,
-                    'P',
-                    ba.primary_set_of_books_id,
-                    ba.reporting_set_of_books_id) = p_sob_id;
+       WHERE ba.reporting_set_of_books_id = p_sob_id;
     END IF;
   
     --submit reval program
@@ -3537,8 +3621,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       hw_conc_utl.out_message_list;
       retcode := '2';
       errbuf  := SQLERRM;
-      hw_log.debug('error_stack:' || fnd_global.newline ||
-                   dbms_utility.format_error_stack);
+      hw_log.debug('Error Stack:' || fnd_global.newline ||
+                   dbms_utility.format_error_backtrace);
   END;
 
   PROCEDURE remeasure(errbuf      OUT VARCHAR2,
@@ -3766,8 +3850,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
                               p_procedure_name => 'remeasure');
       hw_conc_utl.log_message_list;
       hw_conc_utl.out_message_list;
-      hw_log.debug('error_stack:' || fnd_global.newline ||
-                   dbms_utility.format_error_stack);
+      hw_log.debug('Error Stack:' || fnd_global.newline ||
+                   dbms_utility.format_error_backtrace);
     
       retcode := '2';
       errbuf  := SQLERRM;
@@ -3991,8 +4075,8 @@ CREATE OR REPLACE PACKAGE BODY gerfp_gl_reval_pub IS
       hw_conc_utl.out_message_list;
       retcode := '2';
       errbuf  := SQLERRM;
-      hw_log.debug('error_stack:' || fnd_global.newline ||
-                   dbms_utility.format_error_stack);
+      hw_log.debug('Error Stack:' || fnd_global.newline ||
+                   dbms_utility.format_error_backtrace);
   END;
 
 END gerfp_gl_reval_pub;

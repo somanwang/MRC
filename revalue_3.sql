@@ -158,5 +158,128 @@ SELECT a.request_id,
    AND a.request_id NOT IN (12619540,
                             '12616534',
                             '12619542',
-                            '12616535')
+                            '12616535');
 
+SELECT bus.me_code,
+       bus.le_code,
+       bus.book_type,
+       bus.fx_enable_flag,
+       bus.export4,
+       bus.fx_cc,
+       bus.fx_project,
+       bus.fx_reference,
+       bus.fx_account,
+       bus.cta_account
+  FROM xxrfp_shelton_bus_map bus
+ WHERE bus.primary_flag = 'Y'
+   AND bus.le_code != '000000'
+   AND bus.enable_flag = 'Y'
+   AND bus.book_type = 'P'
+   AND bus.cta_account IS NULL;
+
+SELECT a.name,
+       b.conversion_rule
+  FROM gl_sets_of_books       a,
+       gl_mc_conversion_rules b
+ WHERE a.mrc_sob_type_code = 'R'
+   AND a.set_of_books_id = b.reporting_set_of_books_id(+)
+   AND b.je_source_name(+) = '421';
+
+SELECT *
+  FROM gl.gl_interface t
+ WHERE t.user_je_source_name IN ('Remeasurement',
+                                 'Translation');
+
+SELECT sob.name                  sob,
+       gcc.concatenated_segments segments,
+       t.*
+  FROM xxrfp.gerfp_gl_reval_staging t,
+       gl_sets_of_books             sob,
+       gl_code_combinations_kfv     gcc
+ WHERE 1 = 1
+      --   AND t.batch_id = p_batch_id
+      --AND t.status = 'E'
+   AND t.sob_id = sob.set_of_books_id(+)
+   AND t.ccid = gcc.code_combination_id
+   AND gcc.concatenated_segments LIKE 'IQIN03.Y99000.P.3310020020000%'
+ ORDER BY t.batch_id DESC;
+
+SELECT *
+  FROM gerfp_tb t
+ WHERE t.concatenated_segments LIKE 'ESVN01.MS0075.P.0305310020000%'
+   AND t.period_name = 'JUN-12';
+
+SELECT tb.set_of_books_id,
+       tb.name,
+       tb.period_name,
+       tb.mrc_sob_type_code,
+       bus.export4,
+       tb.segment1,
+       tb.segment2,
+       tb.segment3,
+       tb.concatenated_segments,
+       '''' || tb.segment4 acc,
+       tb.description,
+       '''' || ccl.ccl_account,
+       ccl.remeas_value,
+       '''' || ccl.translate_account,
+       '''' || ccl.account_to_roll_to,
+       ccl.enabled_flag ccl_enable_flag,
+       ccl.line_of_business,
+       ccl.remeas_trans,
+       ccl.controlled_account_type,
+       tb.currency_code,
+       tb.functional_currency,
+       tb.begin_balance,
+       tb.ending_balance,
+       tb.period_movement,
+       tb.period_movement_beq,
+       tb.ending_balance_beq
+  FROM gerfp_tb              tb,
+       gerfp_rev_gcc_v       ccl,
+       xxrfp_shelton_bus_map bus
+ WHERE 1 = 1
+   AND tb.mrc_sob_type_code IN ('P',
+                                'R')
+   AND tb.period_name = 'JUN-12'
+   AND (ending_balance <> 0 OR ending_balance_beq <> 0 OR
+       period_movement <> 0)
+   AND tb.code_combination_id = ccl.code_combination_id
+   AND bus.primary_flag = 'Y'
+   AND bus.le_code != '000000'
+   AND bus.me_code = tb.segment1
+   AND bus.le_code = tb.segment2
+   AND bus.book_type = tb.segment3
+   AND bus.enable_flag = 'Y'
+   AND bus.fx_enable_flag = 'Y'
+   AND tb.currency_code = tb.functional_currency;
+
+DECLARE
+
+  v_user_id          NUMBER;
+  v_req_id           NUMBER;
+  v_request_complete BOOLEAN;
+  v_phase            VARCHAR2(20);
+  v_status           VARCHAR2(20);
+  v_dev_phase        VARCHAR2(20);
+  v_dev_status       VARCHAR2(20);
+  v_message          VARCHAR2(200);
+  v_new_req_flag     VARCHAR2(20);
+
+BEGIN
+
+  v_request_complete := apps.fnd_concurrent.wait_for_request(12859793,
+                                                             1,
+                                                             60 * 30,
+                                                             v_phase,
+                                                             v_status,
+                                                             v_dev_phase,
+                                                             v_dev_status,
+                                                             v_message);
+
+  IF v_request_complete = TRUE THEN
+    dbms_output.put_line(v_phase);
+  ELSE
+    dbms_output.put_line('xxx' || v_status || v_message);
+  END IF;
+END;

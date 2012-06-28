@@ -254,7 +254,7 @@ CREATE OR REPLACE PACKAGE BODY hw_api AS
         hw_log.debug('exception:' || chr(10) || SQLERRM);
         -- 10g dbms_utility.format_error_backtrace
         hw_log.debug('error_stack:' || chr(10) ||
-                     dbms_utility.format_error_stack);
+                     dbms_utility.format_error_backtrace);
       END IF;
     
       l_log_level := 6;
